@@ -10,7 +10,7 @@ import {
   WORLD_WIDTH,
 } from "../shared/config.js";
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL ?? "http://localhost:2567";
+const SERVER_URL = resolveServerUrl();
 
 const connectionState = document.querySelector("#connection-state");
 const playerCount = document.querySelector("#player-count");
@@ -288,6 +288,16 @@ function sameInput(a, b) {
 
 function buildPlayerName() {
   return `Crew ${Math.floor(Math.random() * 900 + 100)}`;
+}
+
+function resolveServerUrl() {
+  const { origin, hostname, protocol, port } = window.location;
+
+  if (port === "5173" || port === "4173") {
+    return `${protocol}//${hostname}:2567`;
+  }
+
+  return origin;
 }
 
 new Phaser.Game({

@@ -13,7 +13,8 @@
   "dependencies": {
     "@colyseus/schema": "^4.0.19",
     "colyseus": "^0.17.8",
-    "cors": "^2.8.6"
+    "cors": "^2.8.6",
+    "express": "^5.1.0"
   },
   "devDependencies": {
     "@colyseus/sdk": "^0.17.35",
