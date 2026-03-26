@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <title>Colyseus Phaser Top-Down Template</title>
+  </head>
+  <body>
+    <div id="app">
+      <section class="hud">
+        <div>
+          <p class="eyebrow">Phaser + Colyseus</p>
+          <h1>Top-Down Multiplayer Template</h1>
+          <p class="copy">
+            Open this page in multiple browser tabs. Each player joins the same
+            room and moves around a scrolling map with random boxes.
+          </p>
+        </div>
+        <div class="status-strip">
+          <span id="connection-state">Connecting…</span>
+          <span id="player-count">0 players</span>
+        </div>
+      </section>
+      <main id="game-root"></main>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
