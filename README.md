@@ -28,7 +28,7 @@ The Raspberry Pi can now host the complete game from the Node/Colyseus server it
 On the Raspberry Pi:
 
 ```bash
-docker compose up --build -d
+docker compose up --build -d --force-recreate
 ```
 
 Then open this in a browser on any device in the same network:
@@ -47,6 +47,36 @@ To view logs:
 
 ```bash
 docker compose logs -f server
+```
+
+The server is configured to bind to `0.0.0.0` inside the container, so Docker can publish it on the Raspberry Pi host.
+
+## Docker debugging on the Raspberry Pi
+
+If the page is reachable with `npm run dev` on your laptop but not through Docker on the Pi, debug the Docker publish path first:
+
+```bash
+docker compose down
+docker compose up --build -d --force-recreate
+docker compose ps -a
+docker ps
+ss -ltnp | grep ':2567'
+docker port amongus-server
+curl -v http://127.0.0.1:2567/health
+curl -I http://127.0.0.1:2567/
+```
+
+How to interpret that:
+
+- If `docker compose up` reports `address already in use`, another process is already bound to port `2567` on the Pi.
+- If `docker compose ps -a` shows `Created` or `Exited` instead of `Up`, the container never became healthy enough to serve traffic.
+- If `ss -ltnp` shows a non-Docker process on `:2567`, that process is blocking Docker from publishing the port.
+- If `curl http://127.0.0.1:2567/health` works on the Pi but other devices still cannot connect, the container is fine and the remaining issue is outside the app/container.
+
+To identify a conflicting process on port `2567`:
+
+```bash
+sudo lsof -iTCP:2567 -sTCP:LISTEN -n -P
 ```
 
 ## How the browser connects
