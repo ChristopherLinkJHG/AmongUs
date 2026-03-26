@@ -18,6 +18,8 @@ Then open `http://localhost:5173` in two or more tabs.
 
 In local dev the browser UI is served by Vite on port `5173`, and it connects to the Colyseus server on port `2567`.
 
+The project source is now TypeScript across client, server, and shared code. The server uses Node 24's TypeScript transform support, so use Node `24.x` locally as well.
+
 ## Raspberry Pi server with Docker Compose
 
 The Raspberry Pi can now host the complete game from the Node/Colyseus server itself. The Docker image builds the frontend, stores it in `dist/`, and the server serves those files directly.
@@ -94,3 +96,4 @@ sudo lsof -iTCP:2567 -sTCP:LISTEN -n -P
 - The Colyseus server runs on `http://localhost:2567`
 - The Vite client runs on `http://localhost:5173`
 - In Docker on the Pi, the server also serves the built frontend from `dist/`
+- `npm run typecheck` checks the whole project with `tsc`

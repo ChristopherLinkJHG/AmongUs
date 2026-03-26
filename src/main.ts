@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { Callbacks, Client } from "@colyseus/sdk";
+import { Callbacks, Client, type Room } from "@colyseus/sdk";
 import "./styles.css";
 import {
   GRID_SIZE,
@@ -8,26 +8,64 @@ import {
   VIEWPORT_WIDTH,
   WORLD_HEIGHT,
   WORLD_WIDTH,
-} from "../shared/config.js";
+} from "../shared/config.ts";
+import type { JoinOptions, MovementInput } from "../shared/protocol.ts";
+import type { BoxState, PlayerState, WorldState } from "../server/state.ts";
 
 const SERVER_URL = resolveServerUrl();
 
-const connectionState = document.querySelector("#connection-state");
-const playerCount = document.querySelector("#player-count");
+const connectionState = requireElement<HTMLElement>("#connection-state");
+const playerCount = requireElement<HTMLElement>("#player-count");
+
+interface DirectionKeys {
+  up: Phaser.Input.Keyboard.Key;
+  left: Phaser.Input.Keyboard.Key;
+  down: Phaser.Input.Keyboard.Key;
+  right: Phaser.Input.Keyboard.Key;
+}
+
+interface AvatarConfig {
+  color: string;
+  isLocal: boolean;
+  name: string;
+}
+
+interface AvatarParts {
+  body: Phaser.GameObjects.Ellipse;
+  backpack: Phaser.GameObjects.Ellipse;
+  container: Phaser.GameObjects.Container;
+  label: Phaser.GameObjects.Text;
+  serverX: number;
+  serverY: number;
+  unbind: Array<() => void>;
+}
+
+function getRoomCallbacks(room: Room<any, WorldState>) {
+  return Callbacks.get(room);
+}
+
+type RoomCallbacks = ReturnType<typeof getRoomCallbacks>;
 
 class MainScene extends Phaser.Scene {
+  private readonly players = new Map<string, AvatarParts>();
+  private currentInput: MovementInput = {
+    left: false,
+    right: false,
+    up: false,
+    down: false,
+  };
+  private client?: Client;
+  private room?: Room<any, WorldState>;
+  private callbacks?: RoomCallbacks;
+  private sessionId?: string;
+  private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
+  private wasd!: DirectionKeys;
+
   constructor() {
     super("main");
-    this.players = new Map();
-    this.currentInput = {
-      left: false,
-      right: false,
-      up: false,
-      down: false,
-    };
   }
 
-  create() {
+  create(): void {
     this.cameras.main.setBackgroundColor("#162028");
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
@@ -38,7 +76,7 @@ class MainScene extends Phaser.Scene {
     void this.connect();
   }
 
-  drawBackdrop() {
+  private drawBackdrop(): void {
     const graphics = this.add.graphics();
 
     graphics.fillStyle(0x162028, 1);
@@ -54,22 +92,28 @@ class MainScene extends Phaser.Scene {
     }
   }
 
-  setupKeyboard() {
-    this.cursors = this.input.keyboard.createCursorKeys();
-    this.wasd = this.input.keyboard.addKeys({
+  private setupKeyboard(): void {
+    const keyboard = this.input.keyboard;
+
+    if (!keyboard) {
+      throw new Error("Keyboard input is not available.");
+    }
+
+    this.cursors = keyboard.createCursorKeys();
+    this.wasd = keyboard.addKeys({
       up: Phaser.Input.Keyboard.KeyCodes.W,
       left: Phaser.Input.Keyboard.KeyCodes.A,
       down: Phaser.Input.Keyboard.KeyCodes.S,
       right: Phaser.Input.Keyboard.KeyCodes.D,
-    });
+    }) as DirectionKeys;
   }
 
-  async connect() {
+  private async connect(): Promise<void> {
     try {
       this.client = new Client(SERVER_URL);
-      this.room = await this.client.joinOrCreate(ROOM_NAME, {
+      this.room = await this.client.joinOrCreate<WorldState>(ROOM_NAME, {
         name: buildPlayerName(),
-      });
+      } satisfies JoinOptions);
       this.callbacks = Callbacks.get(this.room);
       this.sessionId = this.room.sessionId;
 
@@ -81,40 +125,54 @@ class MainScene extends Phaser.Scene {
       window.addEventListener(
         "beforeunload",
         () => {
-          this.room?.leave();
+          void this.room?.leave();
         },
         { once: true },
       );
-    } catch (error) {
-      this.setConnectionState(`Connection failed: ${error.message}`);
+    } catch (error: unknown) {
+      this.setConnectionState(`Connection failed: ${formatError(error)}`);
     }
   }
 
-  registerRoomCallbacks() {
+  private registerRoomCallbacks(): void {
+    if (!this.room) {
+      return;
+    }
+
     this.room.onLeave((code) => {
       this.setConnectionState(`Disconnected (${code})`);
     });
 
     this.room.onError((code, message) => {
-      this.setConnectionState(`Error ${code}: ${message}`);
+      this.setConnectionState(`Error ${code}: ${message ?? "Unknown error"}`);
     });
   }
 
-  registerStateCallbacks() {
-    this.callbacks.onAdd("boxes", (box) => {
+  private registerStateCallbacks(): void {
+    const callbacks = this.getCallbacks();
+
+    callbacks.onAdd("boxes", (box) => {
       this.addBox(box);
     });
 
-    this.callbacks.onAdd("players", (player, sessionId) => {
+    callbacks.onAdd("players", (player, sessionId) => {
       this.addPlayer(player, sessionId);
     });
 
-    this.callbacks.onRemove("players", (_player, sessionId) => {
+    callbacks.onRemove("players", (_player, sessionId) => {
       this.removePlayer(sessionId);
     });
   }
 
-  addBox(box) {
+  private getCallbacks(): RoomCallbacks {
+    if (!this.callbacks) {
+      throw new Error("Callbacks are not available before the room connects.");
+    }
+
+    return this.callbacks;
+  }
+
+  private addBox(box: BoxState): void {
     const rectangle = this.add.rectangle(
       box.x + box.width / 2,
       box.y + box.height / 2,
@@ -128,7 +186,8 @@ class MainScene extends Phaser.Scene {
     rectangle.setDepth(rectangle.y - 1);
   }
 
-  addPlayer(player, sessionId) {
+  private addPlayer(player: PlayerState, sessionId: string): void {
+    const callbacks = this.getCallbacks();
     const avatar = createAvatar(this, {
       color: player.color,
       isLocal: sessionId === this.sessionId,
@@ -139,16 +198,16 @@ class MainScene extends Phaser.Scene {
     avatar.serverX = player.x;
     avatar.serverY = player.y;
     avatar.unbind = [
-      this.callbacks.listen(player, "x", (value) => {
+      callbacks.listen(player, "x", (value) => {
         avatar.serverX = value;
       }),
-      this.callbacks.listen(player, "y", (value) => {
+      callbacks.listen(player, "y", (value) => {
         avatar.serverY = value;
       }),
-      this.callbacks.listen(player, "name", (value) => {
+      callbacks.listen(player, "name", (value) => {
         avatar.label.setText(value);
       }),
-      this.callbacks.listen(player, "color", (value) => {
+      callbacks.listen(player, "color", (value) => {
         applyAvatarColor(avatar, value);
       }),
     ];
@@ -161,20 +220,23 @@ class MainScene extends Phaser.Scene {
     }
   }
 
-  removePlayer(sessionId) {
+  private removePlayer(sessionId: string): void {
     const avatar = this.players.get(sessionId);
 
     if (!avatar) {
       return;
     }
 
-    avatar.unbind.forEach((unbind) => unbind?.());
+    for (const unbind of avatar.unbind) {
+      unbind();
+    }
+
     avatar.container.destroy(true);
     this.players.delete(sessionId);
     this.updatePlayerCount();
   }
 
-  update() {
+  update(): void {
     if (this.room) {
       this.pushInput();
     }
@@ -195,8 +257,12 @@ class MainScene extends Phaser.Scene {
     }
   }
 
-  pushInput() {
-    const nextInput = {
+  private pushInput(): void {
+    if (!this.room) {
+      return;
+    }
+
+    const nextInput: MovementInput = {
       left: this.cursors.left.isDown || this.wasd.left.isDown,
       right: this.cursors.right.isDown || this.wasd.right.isDown,
       up: this.cursors.up.isDown || this.wasd.up.isDown,
@@ -208,25 +274,29 @@ class MainScene extends Phaser.Scene {
     }
 
     this.currentInput = nextInput;
-    this.room.send("input", nextInput);
+    this.room.send<MovementInput>("input", nextInput);
   }
 
-  setConnectionState(text) {
+  private setConnectionState(text: string): void {
     connectionState.textContent = text;
   }
 
-  updatePlayerCount() {
+  private updatePlayerCount(): void {
     playerCount.textContent = `${this.players.size} players`;
   }
 }
 
-function createAvatar(scene, config) {
+function createAvatar(scene: MainScene, config: AvatarConfig): AvatarParts {
   const shadow = scene.add.ellipse(0, 21, 32, 14, 0x081117, 0.28);
   const backpack = scene.add.ellipse(0, 0, 12, 20, 0x000000, 1);
   backpack.setPosition(-15, 5);
 
   const body = scene.add.ellipse(0, 0, 38, 44, 0xffffff, 1);
-  body.setStrokeStyle(config.isLocal ? 4 : 2, config.isLocal ? 0xffffff : 0x081117, 0.9);
+  body.setStrokeStyle(
+    config.isLocal ? 4 : 2,
+    config.isLocal ? 0xffffff : 0x081117,
+    0.9,
+  );
 
   const visor = scene.add.ellipse(9, -8, 18, 12, 0xdbf3ff, 1);
   visor.setStrokeStyle(2, 0x87a8bb, 0.8);
@@ -262,13 +332,16 @@ function createAvatar(scene, config) {
   };
 }
 
-function applyAvatarColor(avatar, color) {
+function applyAvatarColor(
+  avatar: Pick<AvatarParts, "body" | "backpack">,
+  color: string,
+): void {
   const baseColor = Phaser.Display.Color.HexStringToColor(color).color;
   avatar.body.setFillStyle(baseColor, 1);
   avatar.backpack.setFillStyle(darken(baseColor, 0.35), 1);
 }
 
-function darken(color, amount) {
+function darken(color: number, amount: number): number {
   const rgb = Phaser.Display.Color.IntegerToColor(color);
   return Phaser.Display.Color.GetColor(
     Math.floor(rgb.red * (1 - amount)),
@@ -277,7 +350,7 @@ function darken(color, amount) {
   );
 }
 
-function sameInput(a, b) {
+function sameInput(a: MovementInput, b: MovementInput): boolean {
   return (
     a.left === b.left &&
     a.right === b.right &&
@@ -286,11 +359,11 @@ function sameInput(a, b) {
   );
 }
 
-function buildPlayerName() {
+function buildPlayerName(): string {
   return `Crew ${Math.floor(Math.random() * 900 + 100)}`;
 }
 
-function resolveServerUrl() {
+function resolveServerUrl(): string {
   const { origin, hostname, protocol, port } = window.location;
 
   if (port === "5173" || port === "4173") {
@@ -298,6 +371,24 @@ function resolveServerUrl() {
   }
 
   return origin;
+}
+
+function requireElement<T extends Element>(selector: string): T {
+  const element = document.querySelector<T>(selector);
+
+  if (!element) {
+    throw new Error(`Missing required element: ${selector}`);
+  }
+
+  return element;
+}
+
+function formatError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }
 
 new Phaser.Game({

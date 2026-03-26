@@ -1,4 +1,4 @@
-import { Room } from "colyseus";
+import { Room, type Client } from "colyseus";
 import {
   BOX_COUNT,
   BOX_MAX_SIZE,
@@ -10,23 +10,34 @@ import {
   PLAYER_SPEED,
   WORLD_HEIGHT,
   WORLD_WIDTH,
-} from "../../shared/config.js";
-import { BoxState, PlayerState, WorldState } from "../state.js";
+} from "../../shared/config.ts";
+import type { JoinOptions, MovementInput } from "../../shared/protocol.ts";
+import { BoxState, PlayerState, WorldState } from "../state.ts";
 
-const EMPTY_INPUT = Object.freeze({
+const EMPTY_INPUT = Object.freeze<MovementInput>({
   left: false,
   right: false,
   up: false,
   down: false,
 });
 
-export class WorldRoom extends Room {
+interface Point {
+  x: number;
+  y: number;
+}
+
+interface BoxPlacement extends Point {
+  width: number;
+  height: number;
+}
+
+export class WorldRoom extends Room<{ state: WorldState }> {
   maxClients = MAX_CLIENTS;
   patchRate = 50;
   state = new WorldState();
-  inputs = new Map();
+  private readonly inputs = new Map<string, Readonly<MovementInput>>();
 
-  onCreate() {
+  onCreate(): void {
     this.state.width = WORLD_WIDTH;
     this.state.height = WORLD_HEIGHT;
 
@@ -41,7 +52,7 @@ export class WorldRoom extends Room {
     });
   }
 
-  onJoin(client, options = {}) {
+  onJoin(client: Client, options: JoinOptions = {}): void {
     const player = new PlayerState();
     const spawn = this.findSpawnPoint();
 
@@ -54,12 +65,12 @@ export class WorldRoom extends Room {
     this.inputs.set(client.sessionId, EMPTY_INPUT);
   }
 
-  onLeave(client) {
+  onLeave(client: Client): void {
     this.state.players.delete(client.sessionId);
     this.inputs.delete(client.sessionId);
   }
 
-  generateBoxes() {
+  private generateBoxes(): void {
     for (let index = 0; index < BOX_COUNT; index += 1) {
       const box = this.findBoxPlacement();
 
@@ -77,15 +88,14 @@ export class WorldRoom extends Room {
     }
   }
 
-  findBoxPlacement() {
+  private findBoxPlacement(): BoxPlacement | undefined {
     for (let attempt = 0; attempt < 80; attempt += 1) {
       const width = randomInt(BOX_MIN_SIZE, BOX_MAX_SIZE);
       const height = randomInt(BOX_MIN_SIZE, BOX_MAX_SIZE);
       const x = randomInt(120, WORLD_WIDTH - width - 120);
       const y = randomInt(120, WORLD_HEIGHT - height - 120);
 
-      const overlapsSpawnLane =
-        x < 280 && y < 280;
+      const overlapsSpawnLane = x < 280 && y < 280;
 
       if (overlapsSpawnLane) {
         continue;
@@ -109,12 +119,17 @@ export class WorldRoom extends Room {
         return { x, y, width, height };
       }
     }
+
+    return undefined;
   }
 
-  findSpawnPoint() {
+  private findSpawnPoint(): Point {
     for (let attempt = 0; attempt < 120; attempt += 1) {
       const x = randomInt(PLAYER_RADIUS + 48, WORLD_WIDTH - PLAYER_RADIUS - 48);
-      const y = randomInt(PLAYER_RADIUS + 48, WORLD_HEIGHT - PLAYER_RADIUS - 48);
+      const y = randomInt(
+        PLAYER_RADIUS + 48,
+        WORLD_HEIGHT - PLAYER_RADIUS - 48,
+      );
 
       if (this.overlapsAnyBox(x, y)) {
         continue;
@@ -132,7 +147,7 @@ export class WorldRoom extends Room {
     return { x: 160, y: 160 };
   }
 
-  updatePlayers(deltaTime) {
+  private updatePlayers(deltaTime: number): void {
     const distance = PLAYER_SPEED * (deltaTime / 1000);
 
     this.state.players.forEach((player, sessionId) => {
@@ -146,19 +161,27 @@ export class WorldRoom extends Room {
         dy = (dy / length) * distance;
       }
 
-      const nextX = clamp(player.x + dx, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
+      const nextX = clamp(
+        player.x + dx,
+        PLAYER_RADIUS,
+        WORLD_WIDTH - PLAYER_RADIUS,
+      );
       if (!this.overlapsAnyBox(nextX, player.y)) {
         player.x = nextX;
       }
 
-      const nextY = clamp(player.y + dy, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
+      const nextY = clamp(
+        player.y + dy,
+        PLAYER_RADIUS,
+        WORLD_HEIGHT - PLAYER_RADIUS,
+      );
       if (!this.overlapsAnyBox(player.x, nextY)) {
         player.y = nextY;
       }
     });
   }
 
-  overlapsAnyBox(x, y) {
+  private overlapsAnyBox(x: number, y: number): boolean {
     const left = x - PLAYER_RADIUS;
     const right = x + PLAYER_RADIUS;
     const top = y - PLAYER_RADIUS;
@@ -175,21 +198,33 @@ export class WorldRoom extends Room {
   }
 }
 
-function sanitizeInput(payload) {
+function sanitizeInput(payload: unknown): MovementInput {
+  const input = payload as Partial<MovementInput> | undefined;
+
   return {
-    left: Boolean(payload?.left),
-    right: Boolean(payload?.right),
-    up: Boolean(payload?.up),
-    down: Boolean(payload?.down),
+    left: Boolean(input?.left),
+    right: Boolean(input?.right),
+    up: Boolean(input?.up),
+    down: Boolean(input?.down),
   };
 }
 
-function sanitizeName(rawName, playerNumber) {
+function sanitizeName(rawName: unknown, playerNumber: number): string {
   const trimmed = String(rawName ?? "").trim().slice(0, 14);
   return trimmed || `Player ${playerNumber}`;
 }
 
-function rectsOverlapWithPadding(ax, ay, aw, ah, bx, by, bw, bh, padding) {
+function rectsOverlapWithPadding(
+  ax: number,
+  ay: number,
+  aw: number,
+  ah: number,
+  bx: number,
+  by: number,
+  bw: number,
+  bh: number,
+  padding: number,
+): boolean {
   return (
     ax - padding < bx + bw &&
     ax + aw + padding > bx &&
@@ -198,10 +233,10 @@ function rectsOverlapWithPadding(ax, ay, aw, ah, bx, by, bw, bh, padding) {
   );
 }
 
-function randomInt(min, max) {
+function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function clamp(value, min, max) {
+function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
