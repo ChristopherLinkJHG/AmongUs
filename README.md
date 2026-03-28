@@ -4,8 +4,9 @@ Minimal browser multiplayer template:
 
 - Phaser renders a top-down scrolling world.
 - Colyseus keeps an authoritative shared room state.
-- Two or more players can move around the same map.
-- The world contains randomly placed boxes that block movement.
+- Two or more players can move around shared maps in real time.
+- Players can switch between multiple dimensions (levels).
+- Each level has its own map size, colors, and box layout.
 
 ## Local development
 
@@ -90,6 +91,35 @@ sudo lsof -iTCP:2567 -sTCP:LISTEN -n -P
 
 - `WASD`
 - Arrow keys
+- `Q` / `E` to switch dimensions (levels)
+- Walk into a colored portal to teleport to its linked dimension
+
+## Level/Dimension system
+
+This project now includes a multi-level (multi-dimension) system.
+
+What was added:
+
+- A new shared level definition file with multiple predefined levels:
+	- `shared/levels.ts`
+- Level-aware world state fields:
+	- `player.levelId`
+	- `box.levelId`
+- Server-side level switching and per-level movement/collision limits.
+- Client-side level visibility filtering (only your current level is shown).
+
+How to use it:
+
+1. Join the game normally.
+2. Press `Q` to move to the previous dimension.
+3. Press `E` to move to the next dimension.
+4. Or walk into a portal ring to jump to that portal's destination.
+5. Portals with the same color are linked pairs.
+6. Watch the HUD pill for your current level name.
+
+For a deeper breakdown of all files changed and how to add/edit levels, see:
+
+- [README_levels.md](README_levels.md)
 
 ## Notes
 

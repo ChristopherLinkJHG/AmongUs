@@ -3,6 +3,7 @@ import { schema, type SchemaType } from "@colyseus/schema";
 export const PlayerState = schema({
   name: "string",
   color: "string",
+  levelId: "string",
   x: "number",
   y: "number",
 });
@@ -10,6 +11,7 @@ export const PlayerState = schema({
 export type PlayerState = SchemaType<typeof PlayerState>;
 
 export const BoxState = schema({
+  levelId: "string",
   x: "number",
   y: "number",
   width: "number",
