@@ -6,22 +6,36 @@ import {
   ROOM_NAME,
   VIEWPORT_HEIGHT,
   VIEWPORT_WIDTH,
-  WORLD_HEIGHT,
-  WORLD_WIDTH,
 } from "../shared/config.ts";
-import type { JoinOptions, MovementInput } from "../shared/protocol.ts";
+import {
+  DEFAULT_LEVEL_ID,
+  LEVELS,
+  LEVELS_BY_ID,
+  type LevelPortal,
+} from "../shared/levels.ts";
+import type {
+  JoinOptions,
+  LevelSwitchRequest,
+  MovementInput,
+} from "../shared/protocol.ts";
 import type { BoxState, PlayerState, WorldState } from "../server/state.ts";
 
 const SERVER_URL = resolveServerUrl();
 
 const connectionState = requireElement<HTMLElement>("#connection-state");
 const playerCount = requireElement<HTMLElement>("#player-count");
+const levelState = requireElement<HTMLElement>("#level-state");
 
 interface DirectionKeys {
   up: Phaser.Input.Keyboard.Key;
   left: Phaser.Input.Keyboard.Key;
   down: Phaser.Input.Keyboard.Key;
   right: Phaser.Input.Keyboard.Key;
+}
+
+interface LevelSwitchKeys {
+  previous: Phaser.Input.Keyboard.Key;
+  next: Phaser.Input.Keyboard.Key;
 }
 
 interface AvatarConfig {
@@ -35,9 +49,22 @@ interface AvatarParts {
   backpack: Phaser.GameObjects.Ellipse;
   container: Phaser.GameObjects.Container;
   label: Phaser.GameObjects.Text;
+  levelId: string;
   serverX: number;
   serverY: number;
   unbind: Array<() => void>;
+}
+
+interface BoxParts {
+  levelId: string;
+  rectangle: Phaser.GameObjects.Rectangle;
+}
+
+interface PortalParts {
+  levelId: string;
+  ring: Phaser.GameObjects.Arc;
+  core: Phaser.GameObjects.Arc;
+  label: Phaser.GameObjects.Text;
 }
 
 function getRoomCallbacks(room: Room<any, WorldState>) {
@@ -48,47 +75,60 @@ type RoomCallbacks = ReturnType<typeof getRoomCallbacks>;
 
 class MainScene extends Phaser.Scene {
   private readonly players = new Map<string, AvatarParts>();
+  private readonly boxes: BoxParts[] = [];
+  private readonly portals: PortalParts[] = [];
+  private readonly backdrops = new Map<string, Phaser.GameObjects.Graphics>();
   private currentInput: MovementInput = {
     left: false,
     right: false,
     up: false,
     down: false,
   };
+  private localLevelId = DEFAULT_LEVEL_ID;
   private client?: Client;
   private room?: Room<any, WorldState>;
   private callbacks?: RoomCallbacks;
   private sessionId?: string;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: DirectionKeys;
+  private levelSwitchKeys!: LevelSwitchKeys;
 
   constructor() {
     super("main");
   }
 
   create(): void {
-    this.cameras.main.setBackgroundColor("#162028");
-    this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    const initialLevel = getLevelById(this.localLevelId);
 
-    this.drawBackdrop();
+    this.cameras.main.setBackgroundColor(initialLevel.backgroundColor);
+    this.cameras.main.setBounds(0, 0, initialLevel.width, initialLevel.height);
+
+    this.drawBackdrops();
+    this.drawPortals();
     this.setupKeyboard();
     this.setConnectionState(`Connecting to ${SERVER_URL}`);
+    this.setLevelState(`${initialLevel.name} · Q/E to switch`);
 
     void this.connect();
   }
 
-  private drawBackdrop(): void {
-    const graphics = this.add.graphics();
+  private drawBackdrops(): void {
+    for (const level of LEVELS) {
+      const graphics = this.add.graphics();
+      graphics.fillStyle(hexToNumber(level.backgroundColor), 1);
+      graphics.fillRect(0, 0, level.width, level.height);
 
-    graphics.fillStyle(0x162028, 1);
-    graphics.fillRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+      graphics.lineStyle(1, hexToNumber(level.gridColor), 0.55);
+      for (let x = 0; x <= level.width; x += GRID_SIZE) {
+        graphics.lineBetween(x, 0, x, level.height);
+      }
 
-    graphics.lineStyle(1, 0x24343f, 0.55);
-    for (let x = 0; x <= WORLD_WIDTH; x += GRID_SIZE) {
-      graphics.lineBetween(x, 0, x, WORLD_HEIGHT);
-    }
+      for (let y = 0; y <= level.height; y += GRID_SIZE) {
+        graphics.lineBetween(0, y, level.width, y);
+      }
 
-    for (let y = 0; y <= WORLD_HEIGHT; y += GRID_SIZE) {
-      graphics.lineBetween(0, y, WORLD_WIDTH, y);
+      graphics.setVisible(level.id === this.localLevelId);
+      this.backdrops.set(level.id, graphics);
     }
   }
 
@@ -106,6 +146,11 @@ class MainScene extends Phaser.Scene {
       down: Phaser.Input.Keyboard.KeyCodes.S,
       right: Phaser.Input.Keyboard.KeyCodes.D,
     }) as DirectionKeys;
+
+    this.levelSwitchKeys = keyboard.addKeys({
+      previous: Phaser.Input.Keyboard.KeyCodes.Q,
+      next: Phaser.Input.Keyboard.KeyCodes.E,
+    }) as LevelSwitchKeys;
   }
 
   private async connect(): Promise<void> {
@@ -173,17 +218,75 @@ class MainScene extends Phaser.Scene {
   }
 
   private addBox(box: BoxState): void {
+    const level = getLevelById(box.levelId);
     const rectangle = this.add.rectangle(
       box.x + box.width / 2,
       box.y + box.height / 2,
       box.width,
       box.height,
-      0x70808b,
+      hexToNumber(level.boxFillColor),
       1,
     );
 
-    rectangle.setStrokeStyle(3, 0xa9b6be, 0.8);
+    rectangle.setStrokeStyle(3, hexToNumber(level.boxStrokeColor), 0.8);
     rectangle.setDepth(rectangle.y - 1);
+    rectangle.setVisible(box.levelId === this.localLevelId);
+
+    this.boxes.push({
+      levelId: box.levelId,
+      rectangle,
+    });
+  }
+
+  private drawPortals(): void {
+    for (const level of LEVELS) {
+      for (const portal of level.portals) {
+        this.addPortal(level.id, portal);
+      }
+    }
+  }
+
+  private addPortal(levelId: string, portal: LevelPortal): void {
+    const ringColor = hexToNumber(portal.color);
+    const coreColor = lightenColor(ringColor, 0.2);
+    const destinationName = getLevelById(portal.targetLevelId).name;
+
+    const ring = this.add.circle(portal.x, portal.y, portal.radius, ringColor, 0.38);
+    ring.setStrokeStyle(4, ringColor, 0.95);
+
+    const core = this.add.circle(
+      portal.x,
+      portal.y,
+      Math.max(8, portal.radius - 10),
+      coreColor,
+      0.78,
+    );
+
+    const label = this.add
+      .text(portal.x, portal.y - portal.radius - 14, `To ${destinationName}`, {
+        fontFamily: "monospace",
+        fontSize: "12px",
+        color: "#f8fbff",
+        stroke: "#0b1014",
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5);
+
+    ring.setDepth(portal.y - 2);
+    core.setDepth(portal.y - 1);
+    label.setDepth(portal.y + 3);
+
+    const visible = levelId === this.localLevelId;
+    ring.setVisible(visible);
+    core.setVisible(visible);
+    label.setVisible(visible);
+
+    this.portals.push({
+      levelId,
+      ring,
+      core,
+      label,
+    });
   }
 
   private addPlayer(player: PlayerState, sessionId: string): void {
@@ -195,6 +298,7 @@ class MainScene extends Phaser.Scene {
     });
 
     avatar.container.setPosition(player.x, player.y);
+    avatar.levelId = player.levelId;
     avatar.serverX = player.x;
     avatar.serverY = player.y;
     avatar.unbind = [
@@ -210,12 +314,22 @@ class MainScene extends Phaser.Scene {
       callbacks.listen(player, "color", (value) => {
         applyAvatarColor(avatar, value);
       }),
+      callbacks.listen(player, "levelId", (value) => {
+        avatar.levelId = value;
+        this.updateAvatarVisibility(avatar);
+
+        if (sessionId === this.sessionId) {
+          this.applyLocalLevel(value);
+        }
+      }),
     ];
 
+    this.updateAvatarVisibility(avatar);
     this.players.set(sessionId, avatar);
     this.updatePlayerCount();
 
     if (sessionId === this.sessionId) {
+      this.applyLocalLevel(player.levelId);
       this.cameras.main.startFollow(avatar.container, true, 0.12, 0.12);
     }
   }
@@ -239,6 +353,7 @@ class MainScene extends Phaser.Scene {
   update(): void {
     if (this.room) {
       this.pushInput();
+      this.pushLevelSwitchInput();
     }
 
     for (const [sessionId, avatar] of this.players.entries()) {
@@ -255,6 +370,53 @@ class MainScene extends Phaser.Scene {
       );
       avatar.container.setDepth(avatar.container.y);
     }
+  }
+
+  private pushLevelSwitchInput(): void {
+    if (!this.room) {
+      return;
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.levelSwitchKeys.previous)) {
+      this.room.send<LevelSwitchRequest>("switch-level", { direction: -1 });
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.levelSwitchKeys.next)) {
+      this.room.send<LevelSwitchRequest>("switch-level", { direction: 1 });
+    }
+  }
+
+  private updateAvatarVisibility(avatar: AvatarParts): void {
+    avatar.container.setVisible(avatar.levelId === this.localLevelId);
+  }
+
+  private applyLocalLevel(levelId: string): void {
+    const level = getLevelById(levelId);
+    this.localLevelId = level.id;
+
+    this.cameras.main.setBackgroundColor(level.backgroundColor);
+    this.cameras.main.setBounds(0, 0, level.width, level.height);
+
+    for (const [id, backdrop] of this.backdrops.entries()) {
+      backdrop.setVisible(id === level.id);
+    }
+
+    for (const box of this.boxes) {
+      box.rectangle.setVisible(box.levelId === level.id);
+    }
+
+    for (const portal of this.portals) {
+      const visible = portal.levelId === level.id;
+      portal.ring.setVisible(visible);
+      portal.core.setVisible(visible);
+      portal.label.setVisible(visible);
+    }
+
+    for (const avatar of this.players.values()) {
+      this.updateAvatarVisibility(avatar);
+    }
+
+    this.setLevelState(`${level.name} · Q/E to switch`);
   }
 
   private pushInput(): void {
@@ -283,6 +445,10 @@ class MainScene extends Phaser.Scene {
 
   private updatePlayerCount(): void {
     playerCount.textContent = `${this.players.size} players`;
+  }
+
+  private setLevelState(text: string): void {
+    levelState.textContent = text;
   }
 }
 
@@ -326,10 +492,31 @@ function createAvatar(scene: MainScene, config: AvatarConfig): AvatarParts {
     backpack,
     container,
     label,
+    levelId: DEFAULT_LEVEL_ID,
     serverX: 0,
     serverY: 0,
     unbind: [],
   };
+}
+
+function getLevelById(levelId: string) {
+  const level = LEVELS_BY_ID.get(levelId);
+
+  if (level) {
+    return level;
+  }
+
+  const fallback = LEVELS[0];
+
+  if (!fallback) {
+    throw new Error("No levels are configured.");
+  }
+
+  return fallback;
+}
+
+function hexToNumber(hexColor: string): number {
+  return Phaser.Display.Color.HexStringToColor(hexColor).color;
 }
 
 function applyAvatarColor(
@@ -347,6 +534,15 @@ function darken(color: number, amount: number): number {
     Math.floor(rgb.red * (1 - amount)),
     Math.floor(rgb.green * (1 - amount)),
     Math.floor(rgb.blue * (1 - amount)),
+  );
+}
+
+function lightenColor(color: number, amount: number): number {
+  const rgb = Phaser.Display.Color.IntegerToColor(color);
+  return Phaser.Display.Color.GetColor(
+    Math.floor(rgb.red + (255 - rgb.red) * amount),
+    Math.floor(rgb.green + (255 - rgb.green) * amount),
+    Math.floor(rgb.blue + (255 - rgb.blue) * amount),
   );
 }
 
