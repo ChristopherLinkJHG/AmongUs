@@ -169,6 +169,35 @@ export const LEVELS: readonly LevelConfig[] = [
       },
     ],
   },
+  {
+    id: "bitmap-test",
+    name: "Bitmap Test",
+    width: 2472,
+    height: 1872,
+    backgroundColor: "#1c2530",
+    gridColor: "#2f414d",
+    boxFillColor: "#738590",
+    boxStrokeColor: "#aec0ca",
+    boxes: [
+      { x: 708.176, y: 71.668, width: 29.046, height: 1728.385 },
+      { x: 707.461, y: 1768.092, width: 1057.078, height: 62.827 },
+      { x: 1614.619, y: 36, width: 77.255, height: 1800 },
+      { x: 719.879, y: 74.281, width: 561.041, height: 45.786 },
+    ],
+    portals: [
+      {
+        id: "path391",
+        x: 910.805,
+        y: 272.31,
+        radius: 107.514,
+        color: "#000000",
+        targetLevelId: "bitmap-test",
+        targetX: 910.805,
+        targetY: 272.31,
+      },
+    ],
+  },
+
 ];
 
 export const DEFAULT_LEVEL_ID = LEVELS[0]?.id ?? "orbit";

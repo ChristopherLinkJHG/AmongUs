@@ -19,6 +19,7 @@
     "src/**/*.d.ts",
     "server/**/*.ts",
     "shared/**/*.ts",
+    "tools/**/*.ts",
     "types/**/*.d.ts",
     "vite.config.ts"
   ],

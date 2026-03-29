@@ -1,129 +1,103 @@
-# Phaser + Colyseus Top-Down Template
+# AmongUs Browser Prototype
 
-Minimal browser multiplayer template:
+A small multiplayer top-down game built with Phaser (client) and Colyseus (server).
 
-- Phaser renders a top-down scrolling world.
-- Colyseus keeps an authoritative shared room state.
-- Two or more players can move around shared maps in real time.
-- Players can switch between multiple dimensions (levels).
-- Each level has its own map size, colors, and box layout.
+## What this project does
 
-## Local development
+- Runs an authoritative multiplayer room on the server
+- Renders a top-down map in the browser
+- Supports multiple levels (dimensions)
+- Supports portals between levels
+- Supports importing level collision/portal data from SVG files
+
+## Tech stack
+
+- TypeScript
+- Phaser
+- Colyseus
+- Vite
+- Node.js 24+
+
+## Quick start
 
 ```bash
 npm install
 npm run dev
 ```
 
-Then open `http://localhost:5173` in two or more tabs.
+Then open:
 
-In local dev the browser UI is served by Vite on port `5173`, and it connects to the Colyseus server on port `2567`.
+http://localhost:2567
 
-The project source is now TypeScript across client, server, and shared code. The server uses Node 24's TypeScript transform support, so use Node `24.x` locally as well.
+or on other devices:
 
-## Raspberry Pi server with Docker Compose
-
-The Raspberry Pi can now host the complete game from the Node/Colyseus server itself. The Docker image builds the frontend, stores it in `dist/`, and the server serves those files directly.
-
-- [compose.yml](/home/info/99_deleteme/AmongUs/compose.yml)
-- [Dockerfile](/home/info/99_deleteme/AmongUs/Dockerfile)
-
-On the Raspberry Pi:
-
-```bash
-docker compose up --build -d --force-recreate
-```
-
-Then open this in a browser on any device in the same network:
-
-```text
-http://YOUR_PI_IP:2567
-```
-
-To stop it:
-
-```bash
-docker compose down
-```
-
-To view logs:
-
-```bash
-docker compose logs -f server
-```
-
-The server is configured to bind to `0.0.0.0` inside the container, so Docker can publish it on the Raspberry Pi host.
-
-## Docker debugging on the Raspberry Pi
-
-If the page is reachable with `npm run dev` on your laptop but not through Docker on the Pi, debug the Docker publish path first:
-
-```bash
-docker compose down
-docker compose up --build -d --force-recreate
-docker compose ps -a
-docker ps
-ss -ltnp | grep ':2567'
-docker port amongus-server
-curl -v http://127.0.0.1:2567/health
-curl -I http://127.0.0.1:2567/
-```
-
-How to interpret that:
-
-- If `docker compose up` reports `address already in use`, another process is already bound to port `2567` on the Pi.
-- If `docker compose ps -a` shows `Created` or `Exited` instead of `Up`, the container never became healthy enough to serve traffic.
-- If `ss -ltnp` shows a non-Docker process on `:2567`, that process is blocking Docker from publishing the port.
-- If `curl http://127.0.0.1:2567/health` works on the Pi but other devices still cannot connect, the container is fine and the remaining issue is outside the app/container.
-
-To identify a conflicting process on port `2567`:
-
-```bash
-sudo lsof -iTCP:2567 -sTCP:LISTEN -n -P
-```
-
-## How the browser connects
-
-- When the built app is served by the Pi on port `2567`, the browser automatically connects back to that same origin.
-- When you use Vite locally on port `5173`, the client automatically targets `http://<current-host>:2567`.
+http://[THIS_SERVERS_IP]:2567
 
 ## Controls
 
-- `WASD`
-- Arrow keys
-- `Q` / `E` to switch dimensions (levels)
-- Walk into a colored portal to teleport to its linked dimension
+- Move: WASD or arrow keys
+- Switch level: Q / E
+- Teleport: walk into a portal
 
-## Level/Dimension system
+## Useful scripts
 
-This project now includes a multi-level (multi-dimension) system.
+- `npm run dev` build client and start app
+- `npm run typecheck` run TypeScript checks
+- `npm run build` build client + typecheck
+- `npm run server` run only the server
 
-What was added:
+## Documentation
 
-- A new shared level definition file with multiple predefined levels:
-	- `shared/levels.ts`
-- Level-aware world state fields:
-	- `player.levelId`
-	- `box.levelId`
-- Server-side level switching and per-level movement/collision limits.
-- Client-side level visibility filtering (only your current level is shown).
+- [README_levels.md](README_levels.md): level structure and editing
+- [README_svg.md](README_svg.md): SVG converter usage and marker rules
 
-How to use it:
+## Level data
 
-1. Join the game normally.
-2. Press `Q` to move to the previous dimension.
-3. Press `E` to move to the next dimension.
-4. Or walk into a portal ring to jump to that portal's destination.
-5. Portals with the same color are linked pairs.
-6. Watch the HUD pill for your current level name.
+Level definitions live in [shared/levels.ts](shared/levels.ts).
 
-For a deeper breakdown of all files changed and how to add/edit levels, see:
+Each level has:
 
-- [README_levels.md](README_levels.md)
+- size
+- colors
+- collision boxes
+- portal list
 
-## Notes
+See [README_levels.md](README_levels.md) for full level editing details.
 
-- The Colyseus server runs on `http://localhost:2567`
-- The Vite client runs on `http://localhost:5173`
-- In Docker on the Pi, the server also serves the built frontend from `dist/`
-- `npm run typecheck` checks the whole project with `tsc`
+## SVG to level conversion
+
+Use the converter to build level data from SVG markers:
+
+```bash
+npm run level -- --in Map.svg --id building-floor-1 --name "Building Floor 1" --out shared/generated/building-floor-1.level.json
+```
+
+Help:
+
+```bash
+npm run level:help
+```
+
+Direct wrapper (without npm):
+
+```bash
+./tools/level --help
+```
+
+Use `--append` to add a new level to [shared/levels.ts](shared/levels.ts), or `--replace` to update an existing one.
+
+See [README_svg.md](README_svg.md) for full marker rules and converter options.
+
+## Docker
+
+You can run the project with Docker Compose:
+
+```bash
+docker compose up --build -d
+```
+
+Stop:
+
+```bash
+docker compose down
+```
