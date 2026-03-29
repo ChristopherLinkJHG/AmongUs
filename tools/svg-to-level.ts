@@ -12,7 +12,9 @@ import {
 import { PLAYER_RADIUS } from "../shared/config.ts";
 
 type WallsMode = "off" | "marker" | "fallback" | "all";
+type ScalingMode = "maps" | "none" | "size" | "player";
 type SharedLevelsWriteMode = "append" | "replace";
+const DEFAULT_WALKABLE_BUFFER = PLAYER_RADIUS * 2;
 
 const LEVELS_ARRAY_END_ANCHOR = "\n];\n\nexport const DEFAULT_LEVEL_ID";
 
@@ -26,6 +28,10 @@ interface CliOptions {
   width?: number;
   height?: number;
   scale?: number;
+  scaleMode: ScalingMode;
+  scaleSize?: number;
+  scalePlayerOpening?: number;
+  walkableBuffer: number;
   scaleLikeExisting: boolean;
   wallThickness?: number;
   doorWidth?: number;
@@ -46,6 +52,7 @@ interface ExtractionOptions {
   wallThickness: number;
   doorWidth: number;
   doorPadding: number;
+  defaultLevelId: string;
 }
 
 interface ParseResult {
@@ -65,6 +72,8 @@ interface ScaleDecision {
 
 interface AutoScaleInputs {
   sourceDoorOpeningSpan: number;
+  referenceWidth?: number;
+  referenceHeight?: number;
 }
 
 interface CenterResult {
@@ -115,7 +124,13 @@ const HELP_TEXT = `
 Convert gameplay markers from an SVG floor plan into this project's LevelConfig format.
 
 Usage:
-  npm run level:from-svg -- --in Map.svg --id building-floor-1 --name "Building Floor 1" --out shared/generated/building-floor-1.level.json
+  npm run level -- --in Map.svg --id building-floor-1 --name "Building Floor 1" --out shared/generated/building-floor-1.level.json
+  ./tools/level --in Map.svg --id building-floor-1 --name "Building Floor 1" --out shared/generated/building-floor-1.level.json
+
+Quick help:
+  npm run level:help
+  npm run level -- --help
+  ./tools/level --help
 
 Required:
   --in <file>                  Source SVG path.
@@ -129,6 +144,10 @@ Optional:
   --width <number>             Override level width.
   --height <number>            Override level height.
   --scale <number>             Manual global scale factor.
+  --scale-mode <mode>          Scaling strategy: maps | none | size | player (default maps).
+  --scale-size <number>        For --scale-mode size: target value for the smaller map edge.
+  --scale-player-opening <n>   For --scale-mode player: target opening size in world units.
+  --walkable-buffer <number>   Extra walkable margin around generated geometry (default ${DEFAULT_WALKABLE_BUFFER}). Use 0 to disable.
   --scale-like-existing <bool> Auto-scale using outermost geometry corners against reference level sizes (default true).
   --walls <mode>               Path wall extraction mode: off | marker | fallback | all (default fallback).
   --wall-thickness <number>    Wall thickness in SVG units before scaling.
@@ -156,6 +175,12 @@ Notes:
   - Auto-scaling preserves aspect ratio (no X/Y stretch).
   - Auto-scaled levels are centered inside reference bounds.
   - Auto-scale can increase size to keep generated openings walkable for the configured player radius.
+  - scale modes:
+      maps   = fit to reference map sizes (similar overall footprint)
+      none   = no scaling (SVG 1:1, no bounds normalization)
+      size   = scale so the smaller edge equals --scale-size
+      player = scale so openings match player clearance
+  - A walkable edge buffer is added around generated geometry by default.
   - Portal target points are scaled only when they target the same level id.
   - Use either --append or --replace (not both).
 `;
@@ -189,11 +214,13 @@ async function main(): Promise<void> {
   const resolvedDoorWidth = cli.doorWidth ?? wallThickness * 4;
   const resolvedDoorPadding = cli.doorPadding ?? Math.max(0.2, wallThickness * 0.45);
   const sourceDoorOpeningSpan = resolvedDoorWidth + resolvedDoorPadding * 2;
+  const referenceSize = resolveReferenceSize(cli.levelId);
   const extraction = extractGameplay(svg, {
     wallsMode: cli.wallsMode,
     wallThickness,
     doorWidth: resolvedDoorWidth,
     doorPadding: resolvedDoorPadding,
+    defaultLevelId: cli.levelId,
   });
 
   if (extraction.errors.length > 0) {
@@ -219,7 +246,7 @@ async function main(): Promise<void> {
 
   const warnings = [...extraction.warnings];
 
-  if (!cli.width && !cli.height) {
+  if (!cli.width && !cli.height && cli.scaleMode !== "none") {
     const bounds = getLevelGeometryBounds(level);
 
     if (bounds) {
@@ -228,10 +255,14 @@ async function main(): Promise<void> {
         `Normalized to geometry bounds corners (${formatNumber(bounds.width)} x ${formatNumber(bounds.height)}).`,
       );
     }
+  } else if (!cli.width && !cli.height && cli.scaleMode === "none") {
+    warnings.push("scale-mode none keeps raw SVG coordinate space (no bounds normalization).");
   }
 
   const scaleDecision = resolveScaleDecision(level, cli, {
     sourceDoorOpeningSpan,
+    referenceWidth: referenceSize?.width,
+    referenceHeight: referenceSize?.height,
   });
   if (
     scaleDecision &&
@@ -255,6 +286,13 @@ async function main(): Promise<void> {
         `Centered level within ${formatNumber(centered.width)}x${formatNumber(centered.height)} (offset x=${formatNumber(centered.offsetX)}, y=${formatNumber(centered.offsetY)}).`,
       );
     }
+  }
+
+  if (cli.walkableBuffer > 0) {
+    addWalkableEdgeBuffer(level, cli.walkableBuffer);
+    warnings.push(
+      `Added walkable edge buffer of ${formatNumber(cli.walkableBuffer)} on all sides.`,
+    );
   }
 
   level.boxes = clampBoxesToBounds(level.boxes, level.width, level.height);
@@ -348,9 +386,27 @@ function parseCliOptions(argv: string[]): CliOptions | undefined {
 
   const levelName = args.get("name")?.trim() || titleizeId(levelId);
   const wallsMode = parseWallsMode(args.get("walls") ?? "fallback");
+  const scaleLikeExisting = getOptionalBooleanArg(args, "scale-like-existing", true);
+  const scaleMode = resolveScaleMode(args, scaleLikeExisting);
+  const scaleSize = getOptionalNumberArg(args, "scale-size");
+  const scalePlayerOpening = getOptionalNumberArg(args, "scale-player-opening");
+  const walkableBuffer =
+    getOptionalNonNegativeNumberArg(args, "walkable-buffer") ?? DEFAULT_WALKABLE_BUFFER;
 
   if (boolFlags.has("append") && boolFlags.has("replace")) {
     throw new Error("Use either --append or --replace, but not both.");
+  }
+
+  if (scaleMode === "size" && scaleSize === undefined) {
+    throw new Error("--scale-mode size requires --scale-size <number>.");
+  }
+
+  if (scaleMode !== "size" && scaleSize !== undefined) {
+    throw new Error("--scale-size can only be used with --scale-mode size.");
+  }
+
+  if (scaleMode !== "player" && scalePlayerOpening !== undefined) {
+    throw new Error("--scale-player-opening can only be used with --scale-mode player.");
   }
 
   return {
@@ -363,7 +419,11 @@ function parseCliOptions(argv: string[]): CliOptions | undefined {
     width: getOptionalNumberArg(args, "width"),
     height: getOptionalNumberArg(args, "height"),
     scale: getOptionalNumberArg(args, "scale"),
-    scaleLikeExisting: getOptionalBooleanArg(args, "scale-like-existing", true),
+    scaleMode,
+    scaleSize,
+    scalePlayerOpening,
+    walkableBuffer,
+    scaleLikeExisting,
     wallThickness: getOptionalNumberArg(args, "wall-thickness"),
     doorWidth: getOptionalNumberArg(args, "door-width"),
     doorPadding: getOptionalNumberArg(args, "door-padding"),
@@ -373,6 +433,35 @@ function parseCliOptions(argv: string[]): CliOptions | undefined {
     boxFillColor: args.get("box-fill"),
     boxStrokeColor: args.get("box-stroke"),
   };
+}
+
+function parseScaleMode(rawMode: string): ScalingMode {
+  const normalized = rawMode.trim().toLowerCase();
+
+  if (
+    normalized === "maps" ||
+    normalized === "none" ||
+    normalized === "size" ||
+    normalized === "player"
+  ) {
+    return normalized;
+  }
+
+  throw new Error(`Invalid --scale-mode: ${rawMode}. Use maps|none|size|player.`);
+}
+
+function resolveScaleMode(args: Map<string, string>, scaleLikeExisting: boolean): ScalingMode {
+  const rawMode = args.get("scale-mode");
+
+  if (rawMode) {
+    return parseScaleMode(rawMode);
+  }
+
+  if (args.has("scale-like-existing")) {
+    return scaleLikeExisting ? "maps" : "none";
+  }
+
+  return "maps";
 }
 
 function parseWallsMode(rawMode: string): WallsMode {
@@ -440,6 +529,25 @@ function getOptionalNumberArg(args: Map<string, string>, key: string): number | 
   return parsed;
 }
 
+function getOptionalNonNegativeNumberArg(
+  args: Map<string, string>,
+  key: string,
+): number | undefined {
+  const raw = args.get(key);
+
+  if (!raw) {
+    return undefined;
+  }
+
+  const parsed = Number(raw);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`--${key} must be a non-negative number.`);
+  }
+
+  return parsed;
+}
+
 function titleizeId(levelId: string): string {
   return levelId
     .split(/[-_\s]+/)
@@ -489,10 +597,12 @@ function deriveWallThickness(width: number, height: number): number {
 
 function extractGameplay(svg: Record<string, unknown>, options: ExtractionOptions): ParseResult {
   const collisionBoxes: LevelBox[] = [];
+  const untypedRectBoxes: LevelBox[] = [];
   const portals: LevelPortal[] = [];
   const errors: string[] = [];
   const warnings: string[] = [];
   const markerIds = new Set<string>();
+  let generatedPortalCount = 0;
 
   const explicitWallPaths: PathMarker[] = [];
   const explicitDoorPaths: PathMarker[] = [];
@@ -514,7 +624,7 @@ function extractGameplay(svg: Record<string, unknown>, options: ExtractionOption
       );
     }
 
-    if (elementName === "rect" && kind === "collision") {
+    if (elementName === "rect") {
       const x = getRequiredNumber(attrs, "x", errors, name);
       const y = getRequiredNumber(attrs, "y", errors, name);
       const width = getRequiredNumber(attrs, "width", errors, name);
@@ -522,23 +632,9 @@ function extractGameplay(svg: Record<string, unknown>, options: ExtractionOption
 
       if (width <= 0 || height <= 0) {
         errors.push(`${formatNode(name, attrs)} width/height must be > 0.`);
-      } else {
+      } else if (kind === "collision") {
         collisionBoxes.push({ x, y, width, height });
-      }
-
-      const maybeId = attrs.id;
-      if (maybeId) {
-        registerMarkerId(maybeId, markerIds, errors, name);
-      }
-    }
-
-    if (elementName === "rect" && isDoorKind(kind)) {
-      const x = getRequiredNumber(attrs, "x", errors, name);
-      const y = getRequiredNumber(attrs, "y", errors, name);
-      const width = getRequiredNumber(attrs, "width", errors, name);
-      const height = getRequiredNumber(attrs, "height", errors, name);
-
-      if (width > 0 && height > 0) {
+      } else if (isDoorKind(kind)) {
         const span = options.doorPadding;
         doorRectCutouts.push({
           x: x - span,
@@ -546,6 +642,9 @@ function extractGameplay(svg: Record<string, unknown>, options: ExtractionOption
           width: width + span * 2,
           height: height + span * 2,
         });
+      } else if (!kind) {
+        // Bitmap-like SVGs often have plain rect walls without data-kind markers.
+        untypedRectBoxes.push({ x, y, width, height });
       }
 
       const maybeId = attrs.id;
@@ -554,12 +653,22 @@ function extractGameplay(svg: Record<string, unknown>, options: ExtractionOption
       }
     }
 
-    if (elementName === "circle" && kind === "portal") {
-      const portal = parsePortal(attrs, errors);
+    if ((elementName === "circle" || elementName === "ellipse") && kind === "portal") {
+      const portal = parsePortalMarker(
+        attrs,
+        elementName,
+        errors,
+        warnings,
+        options.defaultLevelId,
+        generatedPortalCount,
+      );
 
       if (portal) {
         portals.push(portal);
         registerMarkerId(portal.id, markerIds, errors, name);
+        if (!attrs.id?.trim()) {
+          generatedPortalCount += 1;
+        }
       }
     }
 
@@ -615,6 +724,13 @@ function extractGameplay(svg: Record<string, unknown>, options: ExtractionOption
 
   if (wallPathSource.paths.length > 0 && options.wallThickness <= 0) {
     errors.push("wall thickness must be > 0.");
+  }
+
+  if (collisionBoxes.length === 0 && wallPathSource.paths.length === 0 && untypedRectBoxes.length > 0) {
+    collisionBoxes.push(...untypedRectBoxes);
+    warnings.push(
+      "No collision markers were found; using plain rect elements as collision fallback (bitmap-friendly mode).",
+    );
   }
 
   const wallBoxes: LevelBox[] = [];
@@ -725,6 +841,84 @@ function parsePortal(
   };
 }
 
+function parsePortalMarker(
+  attrs: Record<string, string>,
+  elementName: string,
+  errors: string[],
+  warnings: string[],
+  defaultLevelId: string,
+  generatedPortalCount: number,
+): LevelPortal | undefined {
+  const id = attrs.id?.trim() || `portal-auto-${generatedPortalCount + 1}`;
+
+  if (!attrs.id?.trim()) {
+    warnings.push(`Portal marker without id detected; generated id ${id}.`);
+  }
+
+  const x = getRequiredNumber(attrs, "cx", errors, `portal#${id}`);
+  const y = getRequiredNumber(attrs, "cy", errors, `portal#${id}`);
+
+  const radius =
+    elementName === "circle"
+      ? getRequiredNumber(attrs, "r", errors, `portal#${id}`)
+      : resolveEllipseRadius(attrs, id, warnings, errors);
+
+  const explicitTargetLevelId = attrs["data-target-level"]?.trim();
+  const targetLevelId = explicitTargetLevelId || defaultLevelId;
+  if (!explicitTargetLevelId) {
+    warnings.push(`Portal ${id} missing data-target-level; defaulting to ${defaultLevelId}.`);
+  }
+
+  const targetX = parseSvgNumber(attrs["data-target-x"]);
+  const targetY = parseSvgNumber(attrs["data-target-y"]);
+
+  const resolvedTargetX = targetX ?? x;
+  const resolvedTargetY = targetY ?? y;
+
+  if (targetX === undefined || targetY === undefined) {
+    warnings.push(
+      `Portal ${id} missing data-target-x/y; defaulting target to portal center (${formatNumber(resolvedTargetX)}, ${formatNumber(resolvedTargetY)}).`,
+    );
+  }
+
+  if (radius <= 0) {
+    errors.push(`portal#${id} must have radius > 0.`);
+  }
+
+  return {
+    id,
+    x,
+    y,
+    radius,
+    color: readPortalColor(attrs),
+    targetLevelId,
+    targetX: resolvedTargetX,
+    targetY: resolvedTargetY,
+  };
+}
+
+function resolveEllipseRadius(
+  attrs: Record<string, string>,
+  id: string,
+  warnings: string[],
+  errors: string[],
+): number {
+  const rx = getRequiredNumber(attrs, "rx", errors, `portal#${id}`);
+  const ry = getRequiredNumber(attrs, "ry", errors, `portal#${id}`);
+
+  if (!Number.isFinite(rx) || !Number.isFinite(ry) || rx <= 0 || ry <= 0) {
+    return Number.NaN;
+  }
+
+  if (Math.abs(rx - ry) > Math.max(0.25, Math.min(rx, ry) * 0.2)) {
+    warnings.push(
+      `Portal ${id} uses ellipse rx=${formatNumber(rx)}, ry=${formatNumber(ry)}; using average radius for gameplay.`,
+    );
+  }
+
+  return (rx + ry) * 0.5;
+}
+
 function readPortalColor(attrs: Record<string, string>): string {
   const fromData = attrs["data-color"]?.trim();
   if (fromData) {
@@ -803,10 +997,6 @@ function resolveScaleDecision(
     };
   }
 
-  if (!cli.scaleLikeExisting) {
-    return undefined;
-  }
-
   if (cli.width || cli.height) {
     return undefined;
   }
@@ -822,38 +1012,78 @@ function resolveScaleDecision(
     return undefined;
   }
 
-  const referenceLevels = getReferenceLevels(level.id);
-  const targetWidth = median(referenceLevels.map((entry) => entry.width));
-  const targetHeight = median(referenceLevels.map((entry) => entry.height));
+  const targetWidth = autoScaleInputs.referenceWidth;
+  const targetHeight = autoScaleInputs.referenceHeight;
+  const fitScale =
+    targetWidth && targetHeight
+      ? Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight)
+      : undefined;
 
-  if (!Number.isFinite(targetWidth) || !Number.isFinite(targetHeight)) {
-    return undefined;
+  let uniformScale: number | undefined;
+  let reason = "";
+  let centerToReference = false;
+
+  switch (cli.scaleMode) {
+    case "none":
+      return undefined;
+    case "maps": {
+      if (
+        targetWidth === undefined ||
+        targetHeight === undefined ||
+        !fitScale ||
+        !Number.isFinite(fitScale) ||
+        fitScale <= 0
+      ) {
+        return undefined;
+      }
+      uniformScale = fitScale;
+      reason = `scale-mode maps: fit to reference size ${formatNumber(targetWidth)}x${formatNumber(targetHeight)} (aspect ratio preserved)`;
+      centerToReference = true;
+      break;
+    }
+    case "size": {
+      const targetSmallEdge = cli.scaleSize;
+      if (!targetSmallEdge) {
+        return undefined;
+      }
+
+      const sourceSmallEdge = Math.min(sourceWidth, sourceHeight);
+      if (sourceSmallEdge <= 0) {
+        return undefined;
+      }
+
+      uniformScale = targetSmallEdge / sourceSmallEdge;
+      reason = `scale-mode size: smaller edge set to ${formatNumber(targetSmallEdge)} (aspect ratio preserved)`;
+      break;
+    }
+    case "player": {
+      const targetOpening = cli.scalePlayerOpening ?? PLAYER_RADIUS * 2 + 6;
+      if (!Number.isFinite(targetOpening) || targetOpening <= 0) {
+        return undefined;
+      }
+
+      const sourceOpening = Math.max(0.0001, autoScaleInputs.sourceDoorOpeningSpan);
+      uniformScale = targetOpening / sourceOpening;
+      reason = `scale-mode player: openings targeted to ${formatNumber(targetOpening)} world units`;
+      centerToReference = Boolean(fitScale && Number.isFinite(fitScale));
+      break;
+    }
   }
 
-  // Keep source geometry ratio by fitting within reference dimensions using one scale factor.
-  const fitScale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
-  const requiredOpening = PLAYER_RADIUS * 2 + 6;
-  const openingScale =
-    autoScaleInputs.sourceDoorOpeningSpan > 0
-      ? requiredOpening / autoScaleInputs.sourceDoorOpeningSpan
-      : fitScale;
-  const uniformScale = Math.max(fitScale, openingScale);
+  if (!uniformScale || !Number.isFinite(uniformScale) || uniformScale <= 0) {
+    return undefined;
+  }
 
   if (Math.abs(uniformScale - 1) <= 0.08) {
     return undefined;
   }
 
-  const walkabilityRaised = openingScale > fitScale + 1e-6;
-  const reason = walkabilityRaised
-    ? `auto-scale keeps aspect ratio, fits/centers to reference bounds, and raises scale for walkable openings (target >= ${formatNumber(requiredOpening)})`
-    : `auto-scale bounds to fit within median reference size ${formatNumber(targetWidth)}x${formatNumber(targetHeight)} (aspect ratio preserved)`;
-
   return {
     scaleX: uniformScale,
     scaleY: uniformScale,
     reason,
-    targetLevelWidth: targetWidth,
-    targetLevelHeight: targetHeight,
+    targetLevelWidth: centerToReference ? targetWidth : undefined,
+    targetLevelHeight: centerToReference ? targetHeight : undefined,
   };
 }
 
@@ -1001,6 +1231,18 @@ function getReferenceLevels(levelId: string): readonly LevelConfig[] {
   return LEVELS;
 }
 
+function resolveReferenceSize(levelId: string): { width: number; height: number } | undefined {
+  const referenceLevels = getReferenceLevels(levelId);
+  const width = median(referenceLevels.map((entry) => entry.width));
+  const height = median(referenceLevels.map((entry) => entry.height));
+
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return undefined;
+  }
+
+  return { width, height };
+}
+
 function getLevelGeometryBounds(level: LevelConfig): LevelBounds | undefined {
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
@@ -1074,6 +1316,46 @@ function normalizeLevelToBounds(level: LevelConfig, bounds: LevelBounds): void {
       ...normalizedTarget,
     };
   });
+}
+
+function addWalkableEdgeBuffer(level: LevelConfig, buffer: number): void {
+  const margin = round(buffer, 3);
+
+  if (margin <= 0) {
+    return;
+  }
+
+  level.boxes = level.boxes.map((box) => {
+    return {
+      x: round(box.x + margin, 3),
+      y: round(box.y + margin, 3),
+      width: box.width,
+      height: box.height,
+    };
+  });
+
+  level.portals = level.portals.map((portal) => {
+    const shiftedTarget =
+      portal.targetLevelId === level.id
+        ? {
+            targetX: round(portal.targetX + margin, 3),
+            targetY: round(portal.targetY + margin, 3),
+          }
+        : {
+            targetX: portal.targetX,
+            targetY: portal.targetY,
+          };
+
+    return {
+      ...portal,
+      x: round(portal.x + margin, 3),
+      y: round(portal.y + margin, 3),
+      ...shiftedTarget,
+    };
+  });
+
+  level.width = round(level.width + margin * 2, 3);
+  level.height = round(level.height + margin * 2, 3);
 }
 
 function validateLevel(level: LevelConfig): string[] {

@@ -6,10 +6,10 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "concurrently -k -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
-    "dev:server": "node --experimental-transform-types --watch server/index.ts",
-    "dev:client": "vite",
+    "dev": "npm run typecheck && vite build && node --experimental-transform-types server/index.ts",
     "level:from-svg": "node --experimental-transform-types tools/svg-to-level.ts",
+    "level": "node --experimental-transform-types tools/svg-to-level.ts",
+    "level:help": "node --experimental-transform-types tools/svg-to-level.ts --help",
     "typecheck": "tsc",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
