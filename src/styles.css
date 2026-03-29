@@ -24,3 +24,260 @@ body {
   max-width: 100%;
   max-height: 100%;
 }
+
+.ui-overlay {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  padding: 16px;
+}
+
+.panel {
+  border: 1px solid rgba(180, 205, 218, 0.3);
+  border-radius: 12px;
+  background: rgba(8, 13, 18, 0.8);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+
+.top-bar {
+  display: flex;
+  gap: 18px;
+  width: fit-content;
+  padding: 10px 14px;
+}
+
+.top-bar .label {
+  display: block;
+  color: #95b1c0;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.status-banner {
+  margin-top: 10px;
+  max-width: 520px;
+  padding: 10px 14px;
+  color: #d8e6ef;
+}
+
+.meeting {
+  pointer-events: auto;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(680px, calc(100vw - 32px));
+  padding: 16px;
+}
+
+.meeting h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.meeting p {
+  margin: 8px 0;
+  color: #c0d1dc;
+}
+
+#meeting-timer {
+  margin-bottom: 10px;
+  color: #ffd24c;
+}
+
+.vote-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.vote-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(179, 205, 220, 0.15);
+  border-radius: 10px;
+  background: rgba(20, 30, 39, 0.6);
+  padding: 8px 10px;
+}
+
+.vote-row button,
+.meeting-actions button,
+#restart-round-btn {
+  pointer-events: auto;
+  border: 1px solid rgba(198, 216, 227, 0.4);
+  border-radius: 8px;
+  background: rgba(33, 58, 73, 0.8);
+  color: #edf6fb;
+  cursor: pointer;
+  padding: 7px 10px;
+}
+
+.modal {
+  pointer-events: auto;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(560px, calc(100vw - 32px));
+  text-align: center;
+  padding: 18px;
+}
+
+.task-panel {
+  pointer-events: auto;
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: min(420px, calc(100vw - 32px));
+  padding: 14px;
+}
+
+.task-panel h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.task-panel p {
+  color: #cad8e0;
+  margin: 8px 0 10px;
+}
+
+.window-handle-row {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.window-handle-row label {
+  color: #a8c0cd;
+  font-size: 0.86rem;
+}
+
+.window-handle-row input[type="range"] {
+  width: 100%;
+}
+
+.task-mini {
+  display: grid;
+  gap: 10px;
+}
+
+.smudge-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.smudge {
+  pointer-events: auto;
+  border: 1px solid rgba(198, 216, 227, 0.45);
+  border-radius: 8px;
+  background: rgba(69, 89, 102, 0.9);
+  color: #e8f1f7;
+  cursor: pointer;
+  padding: 8px;
+}
+
+.smudge.cleaned {
+  opacity: 0.35;
+  text-decoration: line-through;
+}
+
+.drag-board {
+  display: grid;
+  gap: 10px;
+}
+
+.drag-pool,
+.drop-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.drag-item,
+.drop-slot {
+  border: 1px solid rgba(198, 216, 227, 0.35);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.drag-item {
+  pointer-events: auto;
+  background: rgba(38, 58, 72, 0.85);
+  color: #e6f0f8;
+  cursor: grab;
+}
+
+.drag-item.placed {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.pencil-red {
+  border-color: rgba(230, 98, 98, 0.8);
+}
+
+.pencil-green {
+  border-color: rgba(94, 206, 138, 0.8);
+}
+
+.pencil-blue {
+  border-color: rgba(92, 163, 237, 0.8);
+}
+
+.drop-slot {
+  background: rgba(18, 28, 36, 0.75);
+  color: #b9cfdb;
+}
+
+.drop-slot.filled {
+  border-color: rgba(127, 217, 172, 0.65);
+  color: #d9f7e8;
+}
+
+.mini-muted {
+  color: #9fb7c5;
+  font-size: 0.86rem;
+  margin-bottom: 0;
+}
+
+.copy-target {
+  border-radius: 8px;
+  border: 1px dashed rgba(186, 210, 223, 0.45);
+  background: rgba(12, 20, 27, 0.7);
+  color: #eef6fc;
+  padding: 8px;
+  font-family: "Courier New", monospace;
+}
+
+#homework-input {
+  pointer-events: auto;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(198, 216, 227, 0.42);
+  border-radius: 8px;
+  background: rgba(10, 18, 25, 0.95);
+  color: #e6f0f7;
+  padding: 8px;
+}
+
+.hidden {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .top-bar {
+    flex-wrap: wrap;
+    max-width: calc(100vw - 32px);
+  }
+
+  .status-banner {
+    max-width: calc(100vw - 32px);
+  }
+}

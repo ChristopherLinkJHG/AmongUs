@@ -10,6 +10,116 @@
   </head>
   <body>
     <main id="game-root"></main>
+    <section id="ui-overlay" class="ui-overlay">
+      <div class="top-bar panel">
+        <div>
+          <span class="label">Phase</span>
+          <strong id="phase-value">Lobby</strong>
+        </div>
+        <div>
+          <span class="label">Rolle</span>
+          <strong id="role-value">Unbekannt</strong>
+        </div>
+        <div>
+          <span class="label">Aufgaben</span>
+          <strong id="task-value">0/0</strong>
+        </div>
+      </div>
+
+      <div id="status-banner" class="status-banner panel">Verbinde...</div>
+
+      <div id="role-briefing" class="modal panel hidden"></div>
+
+      <div id="meeting-panel" class="meeting panel hidden">
+        <h2>Besprechung</h2>
+        <p id="meeting-meta">Warte auf Status...</p>
+        <div id="meeting-timer">00s</div>
+        <div id="vote-list" class="vote-list"></div>
+        <div class="meeting-actions">
+          <button id="vote-skip-btn" type="button">Skip stimmen</button>
+        </div>
+      </div>
+
+      <div id="round-end-panel" class="modal panel hidden">
+        <h2>Runde beendet</h2>
+        <p id="round-end-text"></p>
+        <button id="restart-round-btn" type="button">Neue Runde starten</button>
+      </div>
+
+      <div id="task-window-panel" class="task-panel panel hidden">
+        <h2 id="task-window-title">Fenster oeffnen</h2>
+        <p id="task-window-info">Ziehe alle drei Griffe ganz nach rechts.</p>
+
+        <div id="task-mini-window" class="task-mini hidden">
+          <div class="window-handle-row">
+            <label for="window-handle-1">Fenster A</label>
+            <input id="window-handle-1" type="range" min="0" max="100" value="0" />
+          </div>
+          <div class="window-handle-row">
+            <label for="window-handle-2">Fenster B</label>
+            <input id="window-handle-2" type="range" min="0" max="100" value="0" />
+          </div>
+          <div class="window-handle-row">
+            <label for="window-handle-3">Fenster C</label>
+            <input id="window-handle-3" type="range" min="0" max="100" value="0" />
+          </div>
+        </div>
+
+        <div id="task-mini-whiteboard" class="task-mini hidden">
+          <div id="whiteboard-smudges" class="smudge-grid">
+            <button class="smudge" data-smudge-id="a" type="button">Fleck A</button>
+            <button class="smudge" data-smudge-id="b" type="button">Fleck B</button>
+            <button class="smudge" data-smudge-id="c" type="button">Fleck C</button>
+            <button class="smudge" data-smudge-id="d" type="button">Fleck D</button>
+            <button class="smudge" data-smudge-id="e" type="button">Fleck E</button>
+            <button class="smudge" data-smudge-id="f" type="button">Fleck F</button>
+          </div>
+        </div>
+
+        <div id="task-mini-lab" class="task-mini hidden">
+          <div class="drag-board">
+            <div class="drag-pool" id="lab-pool">
+              <div class="drag-item" draggable="true" data-item="becher">Becher</div>
+              <div class="drag-item" draggable="true" data-item="pipette">Pipette</div>
+              <div class="drag-item" draggable="true" data-item="kolben">Kolben</div>
+            </div>
+            <div class="drop-grid" id="lab-slots">
+              <div class="drop-slot" data-slot="becher">Regal: Becher</div>
+              <div class="drop-slot" data-slot="pipette">Regal: Pipette</div>
+              <div class="drop-slot" data-slot="kolben">Regal: Kolben</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="task-mini-homework" class="task-mini hidden">
+          <p class="mini-muted">Schreibe den Satz exakt ab:</p>
+          <div id="homework-target" class="copy-target">Die Schule startet um 08:00.</div>
+          <input id="homework-input" type="text" autocomplete="off" />
+          <div class="meeting-actions">
+            <button id="homework-submit-btn" type="button">Pruefen</button>
+          </div>
+        </div>
+
+        <div id="task-mini-pencils" class="task-mini hidden">
+          <div class="drag-board">
+            <div class="drag-pool" id="pencil-pool">
+              <div class="drag-item pencil-red" draggable="true" data-item="rot">Rot</div>
+              <div class="drag-item pencil-green" draggable="true" data-item="gruen">Gruen</div>
+              <div class="drag-item pencil-blue" draggable="true" data-item="blau">Blau</div>
+            </div>
+            <div class="drop-grid" id="pencil-slots">
+              <div class="drop-slot" data-slot="rot">Fach Rot</div>
+              <div class="drop-slot" data-slot="gruen">Fach Gruen</div>
+              <div class="drop-slot" data-slot="blau">Fach Blau</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="meeting-actions">
+          <button id="task-window-cancel-btn" type="button">Schliessen</button>
+        </div>
+      </div>
+    </section>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

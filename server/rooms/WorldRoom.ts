@@ -13,12 +13,35 @@ import {
   MAX_LEVEL_WIDTH,
   type LevelPortal,
 } from "../../shared/levels.ts";
+import {
+  EVIDENCE_REPORT_RADIUS,
+  MEETING_BUTTON_AREA,
+  OFFICE_RESPAWN,
+} from "../../shared/gameplay.ts";
 import type {
+  CallMeetingRequest,
+  CastVoteRequest,
+  CompleteTaskRequest,
+  EvidenceItemType,
+  GamePhase,
   JoinOptions,
   LevelSwitchRequest,
   MovementInput,
+  RestartRoundRequest,
+  RoleType,
+  TaskType,
+  TeacherCatchRequest,
+  TeamType,
 } from "../../shared/protocol.ts";
-import { BoxState, PlayerState, WorldState } from "../state.ts";
+import {
+  BoxState,
+  EvidenceState,
+  MeetingState,
+  PlayerState,
+  TaskState,
+  VoteState,
+  WorldState,
+} from "../state.ts";
 
 const EMPTY_INPUT = Object.freeze<MovementInput>({
   left: false,
@@ -32,6 +55,110 @@ interface Point {
   y: number;
 }
 
+interface TaskSpawnPoint {
+  id: string;
+  type: TaskType;
+  levelId: string;
+  x: number;
+  y: number;
+  durationMs: number;
+}
+
+const TASK_INTERACT_RADIUS = 90;
+const TEACHER_CATCH_RADIUS = 78;
+const TEACHER_CATCH_COOLDOWN_MS = 10_000;
+const MEETING_DISCUSSION_MS = 20_000;
+const VOTING_DURATION_MS = 25_000;
+const TASK_ACTIVATION_CHANCE = 0.62;
+const MIN_TASKS_PER_ROUND = 4;
+const EVIDENCE_ITEM_TYPES: readonly EvidenceItemType[] = ["phone", "backpack"];
+
+const PHASE: Record<"LOBBY" | "PLAYING" | "MEETING" | "VOTING" | "ENDED", GamePhase> = {
+  LOBBY: "lobby",
+  PLAYING: "playing",
+  MEETING: "meeting",
+  VOTING: "voting",
+  ENDED: "ended",
+};
+
+const ROLE: Record<"TEACHER" | "STUDENT" | "STUDENT_WITH_KEY", RoleType> = {
+  TEACHER: "teacher",
+  STUDENT: "student",
+  STUDENT_WITH_KEY: "student_with_key",
+};
+
+const TEAM: Record<"STUDENTS" | "TEACHER", TeamType> = {
+  STUDENTS: "students",
+  TEACHER: "teacher",
+};
+
+const TASK_SPAWN_POINTS: readonly TaskSpawnPoint[] = [
+  {
+    id: "orbit-whiteboard-a",
+    type: "clean_whiteboard",
+    levelId: "orbit",
+    x: 390,
+    y: 300,
+    durationMs: 4000,
+  },
+  {
+    id: "orbit-whiteboard-b",
+    type: "clean_whiteboard",
+    levelId: "orbit",
+    x: 1860,
+    y: 1280,
+    durationMs: 4000,
+  },
+  {
+    id: "orbit-windows-a",
+    type: "open_windows",
+    levelId: "orbit",
+    x: 2120,
+    y: 250,
+    durationMs: 3500,
+  },
+  {
+    id: "orbit-windows-b",
+    type: "open_windows",
+    levelId: "orbit",
+    x: 500,
+    y: 1480,
+    durationMs: 3500,
+  },
+  {
+    id: "orbit-lab-a",
+    type: "organize_lab_equipment",
+    levelId: "orbit",
+    x: 1460,
+    y: 820,
+    durationMs: 5000,
+  },
+  {
+    id: "orbit-homework-a",
+    type: "copy_homework",
+    levelId: "orbit",
+    x: 1010,
+    y: 220,
+    durationMs: 4500,
+  },
+  {
+    id: "orbit-pencils-a",
+    type: "sort_pencils",
+    levelId: "orbit",
+    x: 2040,
+    y: 700,
+    durationMs: 3000,
+  },
+  {
+    id: "orbit-pencils-b",
+    type: "sort_pencils",
+    levelId: "orbit",
+    x: 1120,
+    y: 1260,
+    durationMs: 3000,
+  },
+];
+
 export class WorldRoom extends Room<{ state: WorldState }> {
   maxClients = MAX_CLIENTS;
   patchRate = 50;
@@ -39,12 +166,28 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private readonly inputs = new Map<string, Readonly<MovementInput>>();
   private readonly portalCooldownUntil = new Map<string, number>();
   private readonly portalTouchLock = new Set<string>();
+  private readonly teacherCatchCooldownUntil = new Map<string, number>();
+  private evidenceCounter = 0;
 
   onCreate(): void {
     this.state.width = MAX_LEVEL_WIDTH;
     this.state.height = MAX_LEVEL_HEIGHT;
+    this.state.roundId = 1;
+    this.state.gamePhase = PHASE.LOBBY;
+    this.state.winnerTeam = "";
+    this.state.teacherSessionId = "";
+    this.state.statusText = "Warte auf Spieler...";
+    this.state.taskTotal = 0;
+    this.state.taskCompleted = 0;
+    this.state.meeting = new MeetingState();
+    this.state.meeting.active = false;
+    this.state.meeting.calledBy = "";
+    this.state.meeting.phase = "";
+    this.state.meeting.endsAtMs = 0;
+    this.state.meeting.source = "";
 
     this.seedBoxes();
+    this.seedTasks();
 
     this.onMessage("input", (client, payload) => {
       this.inputs.set(client.sessionId, sanitizeInput(payload));
@@ -54,7 +197,28 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       this.switchPlayerLevel(client.sessionId, payload);
     });
 
+    this.onMessage("call-meeting", (client, payload) => {
+      this.callMeeting(client.sessionId, payload);
+    });
+
+    this.onMessage("vote", (client, payload) => {
+      this.castVote(client.sessionId, payload);
+    });
+
+    this.onMessage("complete-task", (client, payload) => {
+      this.completeTask(client.sessionId, payload);
+    });
+
+    this.onMessage("teacher-catch", (client, payload) => {
+      this.teacherCatch(client.sessionId, payload);
+    });
+
+    this.onMessage("restart-round", (client, payload) => {
+      this.restartRound(client.sessionId, payload);
+    });
+
     this.setSimulationInterval((deltaTime) => {
+      this.updateRoundState();
       this.updatePlayers(deltaTime);
     });
   }
@@ -68,9 +232,17 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     player.levelId = DEFAULT_LEVEL_ID;
     player.x = spawn.x;
     player.y = spawn.y;
+    player.role = ROLE.STUDENT;
+    player.alive = true;
+    player.tasksCompleted = 0;
+    player.hasVoted = false;
+    player.votedFor = "";
+    player.language = options.language === "de" ? "de" : "en";
 
     this.state.players.set(client.sessionId, player);
     this.inputs.set(client.sessionId, EMPTY_INPUT);
+    this.assignRoles();
+    this.transitionToPlayingIfReady();
   }
 
   onLeave(client: Client): void {
@@ -78,6 +250,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.inputs.delete(client.sessionId);
     this.portalCooldownUntil.delete(client.sessionId);
     this.portalTouchLock.delete(client.sessionId);
+    this.teacherCatchCooldownUntil.delete(client.sessionId);
+    this.removeVotesForPlayer(client.sessionId);
+
+    this.assignRoles();
+    this.transitionToPlayingIfReady();
+    this.evaluateWinConditions();
   }
 
   private seedBoxes(): void {
@@ -93,6 +271,52 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         this.state.boxes.push(entity);
       }
     }
+  }
+
+  private seedTasks(): void {
+    this.state.tasks.length = 0;
+
+    const shuffled = shuffleArray([...TASK_SPAWN_POINTS]);
+    const selected: TaskSpawnPoint[] = [];
+
+    for (const spawnPoint of shuffled) {
+      if (Math.random() < TASK_ACTIVATION_CHANCE) {
+        selected.push(spawnPoint);
+      }
+    }
+
+    if (!selected.some((entry) => entry.type === "open_windows")) {
+      const fallback = shuffled.find((entry) => entry.type === "open_windows");
+      if (fallback) {
+        selected.push(fallback);
+      }
+    }
+
+    for (const spawnPoint of shuffled) {
+      if (selected.length >= MIN_TASKS_PER_ROUND) {
+        break;
+      }
+
+      if (!selected.some((entry) => entry.id === spawnPoint.id)) {
+        selected.push(spawnPoint);
+      }
+    }
+
+    for (const taskSeed of selected) {
+      const task = new TaskState();
+      task.id = `${taskSeed.id}-r${this.state.roundId}`;
+      task.type = taskSeed.type;
+      task.levelId = taskSeed.levelId;
+      task.x = taskSeed.x;
+      task.y = taskSeed.y;
+      task.durationMs = taskSeed.durationMs;
+      task.completed = false;
+      task.completedBy = "";
+      this.state.tasks.push(task);
+    }
+
+    this.state.taskTotal = this.state.tasks.length;
+    this.state.taskCompleted = 0;
   }
 
   private findSpawnPoint(levelId: string): Point {
@@ -141,6 +365,14 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       return;
     }
 
+    if (this.state.gamePhase !== PHASE.PLAYING) {
+      return;
+    }
+
+    if (player.alive && !this.canUseElevator(player)) {
+      return;
+    }
+
     const targetLevel = this.resolveTargetLevel(player.levelId, payload);
 
     if (!targetLevel || targetLevel.id === player.levelId) {
@@ -178,6 +410,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   }
 
   private updatePlayers(deltaTime: number): void {
+    if (this.state.gamePhase !== PHASE.PLAYING) {
+      return;
+    }
+
     const distance = PLAYER_SPEED * (deltaTime / 1000);
 
     this.state.players.forEach((player, sessionId) => {
@@ -202,7 +438,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         PLAYER_RADIUS,
         level.width - PLAYER_RADIUS,
       );
-      if (!this.overlapsAnyBox(nextX, player.y, level.id)) {
+      if (!player.alive || !this.overlapsAnyBox(nextX, player.y, level.id)) {
         player.x = nextX;
       }
 
@@ -211,12 +447,495 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         PLAYER_RADIUS,
         level.height - PLAYER_RADIUS,
       );
-      if (!this.overlapsAnyBox(player.x, nextY, level.id)) {
+      if (!player.alive || !this.overlapsAnyBox(player.x, nextY, level.id)) {
         player.y = nextY;
       }
 
       this.tryUsePortal(player, sessionId);
     });
+  }
+
+  private updateRoundState(): void {
+    if (!this.state.meeting.active) {
+      return;
+    }
+
+    const now = Date.now();
+
+    if (this.state.gamePhase === PHASE.MEETING && now >= this.state.meeting.endsAtMs) {
+      this.state.gamePhase = PHASE.VOTING;
+      this.state.meeting.phase = PHASE.VOTING;
+      this.state.meeting.endsAtMs = now + VOTING_DURATION_MS;
+      this.state.statusText = "Abstimmung gestartet.";
+      return;
+    }
+
+    if (
+      this.state.gamePhase === PHASE.VOTING &&
+      (now >= this.state.meeting.endsAtMs || this.haveAllActivePlayersVoted())
+    ) {
+      this.resolveVoting();
+    }
+  }
+
+  private callMeeting(sessionId: string, payload: unknown): void {
+    const request = payload as CallMeetingRequest | undefined;
+    const caller = this.state.players.get(sessionId);
+
+    if (!caller || !caller.alive) {
+      return;
+    }
+
+    if (this.state.gamePhase !== PHASE.PLAYING) {
+      return;
+    }
+
+    const evidence = this.findReportableEvidence(caller, request?.evidenceId);
+    const fromButton = this.isNearMeetingButton(caller);
+
+    if (!fromButton && !evidence) {
+      return;
+    }
+
+    this.resetVotingState();
+    this.state.meeting.active = true;
+    this.state.meeting.calledBy = sessionId;
+    this.state.meeting.phase = PHASE.MEETING;
+    this.state.meeting.endsAtMs = Date.now() + MEETING_DISCUSSION_MS;
+    this.state.meeting.source = evidence ? "evidence" : "button";
+    this.state.gamePhase = PHASE.MEETING;
+
+    if (evidence) {
+      evidence.reported = true;
+      this.state.statusText = `${caller.name} hat einen Hinweis gefunden.`;
+    } else {
+      this.state.statusText = `Besprechung von ${caller.name} einberufen.`;
+    }
+  }
+
+  private castVote(sessionId: string, payload: unknown): void {
+    if (this.state.gamePhase !== PHASE.VOTING) {
+      return;
+    }
+
+    const request = payload as CastVoteRequest | undefined;
+    const voter = this.state.players.get(sessionId);
+
+    if (!voter || !voter.alive || voter.hasVoted) {
+      return;
+    }
+
+    const targetId = request?.targetSessionId?.trim();
+
+    if (!targetId) {
+      return;
+    }
+
+    if (targetId !== "skip") {
+      const target = this.state.players.get(targetId);
+      if (!target || !target.alive) {
+        return;
+      }
+    }
+
+    const vote = new VoteState();
+    vote.voterSessionId = sessionId;
+    vote.targetSessionId = targetId;
+    this.state.votes.push(vote);
+
+    voter.hasVoted = true;
+    voter.votedFor = targetId;
+
+    if (this.haveAllActivePlayersVoted()) {
+      this.resolveVoting();
+    }
+  }
+
+  private completeTask(sessionId: string, payload: unknown): void {
+    if (this.state.gamePhase !== PHASE.PLAYING) {
+      return;
+    }
+
+    const request = payload as CompleteTaskRequest | undefined;
+    const player = this.state.players.get(sessionId);
+
+    if (!player || !player.alive || player.role === ROLE.TEACHER) {
+      return;
+    }
+
+    const taskId = request?.taskId?.trim();
+    if (!taskId) {
+      return;
+    }
+
+    const task = this.state.tasks.find((entry) => entry.id === taskId);
+    if (!task || task.completed) {
+      return;
+    }
+
+    if (task.levelId !== player.levelId) {
+      return;
+    }
+
+    if (Math.hypot(task.x - player.x, task.y - player.y) > TASK_INTERACT_RADIUS) {
+      return;
+    }
+
+    task.completed = true;
+    task.completedBy = sessionId;
+    player.tasksCompleted += 1;
+    this.state.taskCompleted += 1;
+    this.state.statusText = `Aufgabe erledigt: ${this.taskTypeToGerman(task.type)}.`;
+    this.evaluateWinConditions();
+  }
+
+  private teacherCatch(sessionId: string, payload: unknown): void {
+    if (this.state.gamePhase !== PHASE.PLAYING) {
+      return;
+    }
+
+    const request = payload as TeacherCatchRequest | undefined;
+    const teacher = this.state.players.get(sessionId);
+
+    if (!teacher || !teacher.alive || teacher.role !== ROLE.TEACHER) {
+      return;
+    }
+
+    const targetId = request?.targetSessionId?.trim();
+    if (!targetId) {
+      return;
+    }
+
+    const cooldownUntil = this.teacherCatchCooldownUntil.get(sessionId) ?? 0;
+    if (Date.now() < cooldownUntil) {
+      return;
+    }
+
+    const target = this.state.players.get(targetId);
+    if (!target || !target.alive || target.role === ROLE.TEACHER) {
+      return;
+    }
+
+    if (teacher.levelId !== target.levelId) {
+      return;
+    }
+
+    const distance = Math.hypot(teacher.x - target.x, teacher.y - target.y);
+    if (distance > TEACHER_CATCH_RADIUS) {
+      return;
+    }
+
+    const evidenceX = target.x;
+    const evidenceY = target.y;
+    const evidenceLevelId = target.levelId;
+
+    target.alive = false;
+    target.x = OFFICE_RESPAWN.x;
+    target.y = OFFICE_RESPAWN.y;
+    target.levelId = OFFICE_RESPAWN.levelId;
+    this.inputs.set(targetId, EMPTY_INPUT);
+
+    this.createEvidenceDrop(targetId, evidenceLevelId, evidenceX, evidenceY);
+
+    this.teacherCatchCooldownUntil.set(sessionId, Date.now() + TEACHER_CATCH_COOLDOWN_MS);
+    this.state.statusText = `${target.name} wurde ins Buero gebracht.`;
+    this.evaluateWinConditions();
+  }
+
+  private assignRoles(): void {
+    const entries = Array.from(this.state.players.entries());
+
+    this.state.teacherSessionId = "";
+
+    if (entries.length === 0) {
+      return;
+    }
+
+    entries.forEach(([sessionId, player], index) => {
+      if (entries.length === 1) {
+        player.role = ROLE.STUDENT_WITH_KEY;
+        return;
+      }
+
+      if (index === 0) {
+        player.role = ROLE.TEACHER;
+        this.state.teacherSessionId = sessionId;
+        return;
+      }
+
+      if (index === 1) {
+        player.role = ROLE.STUDENT_WITH_KEY;
+        return;
+      }
+
+      player.role = ROLE.STUDENT;
+    });
+  }
+
+  private transitionToPlayingIfReady(): void {
+    if (this.state.players.size < 2) {
+      this.state.gamePhase = PHASE.LOBBY;
+      this.state.statusText = "Mindestens 2 Spieler werden benoetigt.";
+      return;
+    }
+
+    if (this.state.gamePhase === PHASE.LOBBY) {
+      this.state.gamePhase = PHASE.PLAYING;
+      this.state.statusText = "Runde gestartet.";
+    }
+  }
+
+  private resolveVoting(): void {
+    const tally = new Map<string, number>();
+
+    for (const vote of this.state.votes) {
+      tally.set(vote.targetSessionId, (tally.get(vote.targetSessionId) ?? 0) + 1);
+    }
+
+    let leaderId = "";
+    let leaderCount = 0;
+    let tie = false;
+
+    for (const [targetId, count] of tally.entries()) {
+      if (count > leaderCount) {
+        leaderId = targetId;
+        leaderCount = count;
+        tie = false;
+      } else if (count === leaderCount) {
+        tie = true;
+      }
+    }
+
+    if (!tie && leaderId && leaderId !== "skip") {
+      const eliminated = this.state.players.get(leaderId);
+      if (eliminated && eliminated.alive) {
+        eliminated.alive = false;
+        eliminated.levelId = OFFICE_RESPAWN.levelId;
+        eliminated.x = OFFICE_RESPAWN.x;
+        eliminated.y = OFFICE_RESPAWN.y;
+        this.inputs.set(leaderId, EMPTY_INPUT);
+        this.state.statusText = `${eliminated.name} wurde herausgewaehlt.`;
+      }
+    } else {
+      this.state.statusText = "Gleichstand: Niemand wurde herausgewaehlt.";
+    }
+
+    this.endMeeting();
+    this.evaluateWinConditions();
+  }
+
+  private endMeeting(): void {
+    this.state.meeting.active = false;
+    this.state.meeting.calledBy = "";
+    this.state.meeting.phase = "";
+    this.state.meeting.endsAtMs = 0;
+    this.state.meeting.source = "";
+
+    this.resetVotingState();
+
+    if (this.state.gamePhase === PHASE.MEETING || this.state.gamePhase === PHASE.VOTING) {
+      this.state.gamePhase = PHASE.PLAYING;
+    }
+  }
+
+  private resetVotingState(): void {
+    this.state.votes.length = 0;
+    this.state.players.forEach((player) => {
+      player.hasVoted = false;
+      player.votedFor = "";
+    });
+  }
+
+  private removeVotesForPlayer(sessionId: string): void {
+    const keptVotes = this.state.votes.filter(
+      (vote) => vote.voterSessionId !== sessionId && vote.targetSessionId !== sessionId,
+    );
+
+    this.state.votes.length = 0;
+
+    for (const voteData of keptVotes) {
+      const vote = new VoteState();
+      vote.voterSessionId = voteData.voterSessionId;
+      vote.targetSessionId = voteData.targetSessionId;
+      this.state.votes.push(vote);
+    }
+  }
+
+  private haveAllActivePlayersVoted(): boolean {
+    const activePlayers = Array.from(this.state.players.values()).filter(
+      (player) => player.alive,
+    );
+
+    if (activePlayers.length === 0) {
+      return false;
+    }
+
+    return activePlayers.every((player) => player.hasVoted);
+  }
+
+  private evaluateWinConditions(): void {
+    if (this.state.gamePhase === PHASE.ENDED) {
+      return;
+    }
+
+    if (this.state.taskTotal > 0 && this.state.taskCompleted >= this.state.taskTotal) {
+      this.finishRound(TEAM.STUDENTS, "Die Schueler haben alle Aufgaben erledigt.");
+      return;
+    }
+
+    const teacher = this.state.teacherSessionId
+      ? this.state.players.get(this.state.teacherSessionId)
+      : undefined;
+
+    if (!teacher || !teacher.alive) {
+      this.finishRound(TEAM.STUDENTS, "Der Lehrer wurde entfernt. Schueler gewinnen.");
+      return;
+    }
+
+    const aliveStudents = Array.from(this.state.players.values()).filter(
+      (player) => player.alive && player.role !== ROLE.TEACHER,
+    ).length;
+
+    if (aliveStudents <= 1 && this.state.players.size >= 2) {
+      this.finishRound(TEAM.TEACHER, "Nur noch ein Schueler uebrig. Lehrer gewinnt.");
+      return;
+    }
+
+    if (this.state.players.size < 2) {
+      this.state.gamePhase = PHASE.LOBBY;
+      this.state.statusText = "Mindestens 2 Spieler werden benoetigt.";
+    }
+  }
+
+  private findReportableEvidence(
+    player: PlayerState,
+    evidenceId?: string,
+  ): EvidenceState | undefined {
+    if (!player.alive) {
+      return undefined;
+    }
+
+    const preferred = evidenceId?.trim();
+
+    const candidates = this.state.evidence.filter((entry) => {
+      if (entry.reported || entry.levelId !== player.levelId) {
+        return false;
+      }
+
+      return Math.hypot(entry.x - player.x, entry.y - player.y) <= EVIDENCE_REPORT_RADIUS;
+    });
+
+    if (preferred) {
+      const matching = candidates.find((entry) => entry.id === preferred);
+      if (matching) {
+        return matching;
+      }
+    }
+
+    return candidates[0];
+  }
+
+  private createEvidenceDrop(
+    ownerSessionId: string,
+    levelId: string,
+    x: number,
+    y: number,
+  ): void {
+    this.evidenceCounter += 1;
+
+    const evidence = new EvidenceState();
+    evidence.id = `evidence-${this.state.roundId}-${this.evidenceCounter}`;
+    evidence.levelId = levelId;
+    evidence.x = x;
+    evidence.y = y;
+    evidence.itemType = EVIDENCE_ITEM_TYPES[this.evidenceCounter % EVIDENCE_ITEM_TYPES.length];
+    evidence.ownerSessionId = ownerSessionId;
+    evidence.reported = false;
+
+    this.state.evidence.push(evidence);
+  }
+
+  private restartRound(sessionId: string, payload: unknown): void {
+    const request = payload as RestartRoundRequest | undefined;
+
+    if (this.state.gamePhase !== PHASE.ENDED && !request?.force) {
+      return;
+    }
+
+    if (!this.state.players.has(sessionId)) {
+      return;
+    }
+
+    this.resetRound();
+  }
+
+  private resetRound(): void {
+    this.state.roundId += 1;
+    this.state.winnerTeam = "";
+    this.state.statusText = "Neue Runde vorbereitet.";
+    this.state.gamePhase = PHASE.LOBBY;
+
+    this.resetVotingState();
+    this.endMeeting();
+    this.seedTasks();
+
+    this.state.evidence.length = 0;
+    this.evidenceCounter = 0;
+    this.teacherCatchCooldownUntil.clear();
+
+    this.state.players.forEach((player, sessionId) => {
+      const spawn = this.findSpawnPoint(DEFAULT_LEVEL_ID);
+      player.alive = true;
+      player.tasksCompleted = 0;
+      player.hasVoted = false;
+      player.votedFor = "";
+      player.levelId = DEFAULT_LEVEL_ID;
+      player.x = spawn.x;
+      player.y = spawn.y;
+      this.inputs.set(sessionId, EMPTY_INPUT);
+    });
+
+    this.assignRoles();
+    this.transitionToPlayingIfReady();
+  }
+
+  private finishRound(winnerTeam: TeamType, message: string): void {
+    this.state.gamePhase = PHASE.ENDED;
+    this.state.winnerTeam = winnerTeam;
+    this.state.statusText = message;
+    this.endMeeting();
+  }
+
+  private canUseElevator(player: PlayerState): boolean {
+    return player.role === ROLE.TEACHER || player.role === ROLE.STUDENT_WITH_KEY;
+  }
+
+  private isNearMeetingButton(player: PlayerState): boolean {
+    if (player.levelId !== MEETING_BUTTON_AREA.levelId) {
+      return false;
+    }
+
+    return (
+      Math.hypot(player.x - MEETING_BUTTON_AREA.x, player.y - MEETING_BUTTON_AREA.y) <=
+      MEETING_BUTTON_AREA.radius
+    );
+  }
+
+  private taskTypeToGerman(taskType: string): string {
+    switch (taskType) {
+      case "clean_whiteboard":
+        return "Tafel reinigen";
+      case "open_windows":
+        return "Fenster oeffnen";
+      case "organize_lab_equipment":
+        return "Laborgeraete sortieren";
+      case "copy_homework":
+        return "Hausaufgaben abschreiben";
+      case "sort_pencils":
+        return "Stifte sortieren";
+      default:
+        return "Unbekannte Aufgabe";
+    }
   }
 
   private tryUsePortal(player: PlayerState, sessionId: string): void {
@@ -310,6 +1029,17 @@ function sanitizeName(rawName: unknown, playerNumber: number): string {
 
 function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function shuffleArray<T>(items: T[]): T[] {
+  for (let i = items.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const current = items[i];
+    items[i] = items[j] as T;
+    items[j] = current as T;
+  }
+
+  return items;
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -1,22 +1,20 @@
-# AmongUs Browser Prototype
+# AmongUs School Prototype
 
-A small multiplayer top-down game built with Phaser (client) and Colyseus (server).
+Multiplayer top-down social deduction prototype with Phaser (client) and Colyseus (server).
 
-## What this project does
+## Current gameplay
 
-- Runs an authoritative multiplayer room on the server
-- Renders a top-down map in the browser
-- Supports multiple levels (dimensions)
-- Supports portals between levels
-- Supports importing level collision/portal data from SVG files
-
-## Tech stack
-
-- TypeScript
-- Phaser
-- Colyseus
-- Vite
-- Node.js 24+
+- German gameplay UI and prompts
+- Roles: `teacher`, `student`, `student_with_key`
+- Student tasks with global team progress
+- Emergency meeting button in the lobby
+- Evidence drops (phone/backpack) when a student is caught
+- Meetings + voting with tie = nobody eliminated
+- Win conditions:
+	- students win if all tasks are completed
+	- students win if teacher is voted out
+	- teacher wins if only one student remains
+- Round restart flow without restarting the server
 
 ## Quick start
 
@@ -25,78 +23,40 @@ npm install
 npm run dev
 ```
 
-Then open:
-
-http://localhost:2567
-
-or on other devices:
-
-http://[THIS_SERVERS_IP]:2567
+Open `http://localhost:2567`.
 
 ## Controls
 
-- Move: WASD or arrow keys
-- Switch level: Q / E
-- Teleport: walk into a portal
+- Move: `WASD` or arrow keys
+- Level switch (elevator roles only): `Q` / `E`
+- Call meeting: `M`
+- Complete nearby task: `F`
+- Teacher catch action: `C`
+- Vote skip: `V`
+- Vote first candidate (shortcut): `1`
+- Restart round after end: `R`
 
-## Useful scripts
+## Scripts
 
-- `npm run dev` build client and start app
-- `npm run typecheck` run TypeScript checks
-- `npm run build` build client + typecheck
-- `npm run server` run only the server
+- `npm run dev` typecheck, build client, start server
+- `npm run typecheck` TypeScript validation
+- `npm run build` production build
+- `npm run server` run server only
+- `npm run level` SVG converter entrypoint
 
 ## Documentation
 
-- [README_levels.md](README_levels.md): level structure and editing
+- [README_gameplay.md](README_gameplay.md): roles, phases, meeting/voting, evidence, restart flow
+- [README_levels.md](README_levels.md): level definitions and structure
 - [README_svg.md](README_svg.md): SVG converter usage and marker rules
 
-## Level data
-
-Level definitions live in [shared/levels.ts](shared/levels.ts).
-
-Each level has:
-
-- size
-- colors
-- collision boxes
-- portal list
-
-See [README_levels.md](README_levels.md) for full level editing details.
-
-## SVG to level conversion
-
-Use the converter to build level data from SVG markers:
-
-```bash
-npm run level -- --in Map.svg --id building-floor-1 --name "Building Floor 1" --out shared/generated/building-floor-1.level.json
-```
-
-Help:
-
-```bash
-npm run level:help
-```
-
-Direct wrapper (without npm):
-
-```bash
-./tools/level --help
-```
-
-Use `--append` to add a new level to [shared/levels.ts](shared/levels.ts), or `--replace` to update an existing one.
-
-See [README_svg.md](README_svg.md) for full marker rules and converter options.
-
 ## Docker
-
-You can run the project with Docker Compose:
 
 ```bash
 docker compose up --build -d
 ```
 
-Stop:
+Stop with:
 
 ```bash
 docker compose down
