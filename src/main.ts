@@ -22,10 +22,6 @@ import type { BoxState, PlayerState, WorldState } from "../server/state.ts";
 
 const SERVER_URL = resolveServerUrl();
 
-const connectionState = requireElement<HTMLElement>("#connection-state");
-const playerCount = requireElement<HTMLElement>("#player-count");
-const levelState = requireElement<HTMLElement>("#level-state");
-
 interface DirectionKeys {
   up: Phaser.Input.Keyboard.Key;
   left: Phaser.Input.Keyboard.Key;
@@ -106,8 +102,6 @@ class MainScene extends Phaser.Scene {
     this.drawBackdrops();
     this.drawPortals();
     this.setupKeyboard();
-    this.setConnectionState(`Connecting to ${SERVER_URL}`);
-    this.setLevelState(`${initialLevel.name} · Q/E to switch`);
 
     void this.connect();
   }
@@ -165,8 +159,6 @@ class MainScene extends Phaser.Scene {
       this.registerStateCallbacks();
       this.registerRoomCallbacks();
 
-      this.setConnectionState(`Connected to room ${this.room.roomId}`);
-
       window.addEventListener(
         "beforeunload",
         () => {
@@ -175,7 +167,7 @@ class MainScene extends Phaser.Scene {
         { once: true },
       );
     } catch (error: unknown) {
-      this.setConnectionState(`Connection failed: ${formatError(error)}`);
+      console.error(`Connection failed: ${formatError(error)}`);
     }
   }
 
@@ -185,11 +177,11 @@ class MainScene extends Phaser.Scene {
     }
 
     this.room.onLeave((code) => {
-      this.setConnectionState(`Disconnected (${code})`);
+      console.warn(`Disconnected (${code})`);
     });
 
     this.room.onError((code, message) => {
-      this.setConnectionState(`Error ${code}: ${message ?? "Unknown error"}`);
+      console.error(`Error ${code}: ${message ?? "Unknown error"}`);
     });
   }
 
@@ -326,7 +318,6 @@ class MainScene extends Phaser.Scene {
 
     this.updateAvatarVisibility(avatar);
     this.players.set(sessionId, avatar);
-    this.updatePlayerCount();
 
     if (sessionId === this.sessionId) {
       this.applyLocalLevel(player.levelId);
@@ -347,7 +338,6 @@ class MainScene extends Phaser.Scene {
 
     avatar.container.destroy(true);
     this.players.delete(sessionId);
-    this.updatePlayerCount();
   }
 
   update(): void {
@@ -415,8 +405,6 @@ class MainScene extends Phaser.Scene {
     for (const avatar of this.players.values()) {
       this.updateAvatarVisibility(avatar);
     }
-
-    this.setLevelState(`${level.name} · Q/E to switch`);
   }
 
   private pushInput(): void {
@@ -437,18 +425,6 @@ class MainScene extends Phaser.Scene {
 
     this.currentInput = nextInput;
     this.room.send<MovementInput>("input", nextInput);
-  }
-
-  private setConnectionState(text: string): void {
-    connectionState.textContent = text;
-  }
-
-  private updatePlayerCount(): void {
-    playerCount.textContent = `${this.players.size} players`;
-  }
-
-  private setLevelState(text: string): void {
-    levelState.textContent = text;
   }
 }
 
@@ -567,16 +543,6 @@ function resolveServerUrl(): string {
   }
 
   return origin;
-}
-
-function requireElement<T extends Element>(selector: string): T {
-  const element = document.querySelector<T>(selector);
-
-  if (!element) {
-    throw new Error(`Missing required element: ${selector}`);
-  }
-
-  return element;
 }
 
 function formatError(error: unknown): string {
