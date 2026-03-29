@@ -250,3 +250,105 @@ That gives you a pipeline that is:
 - engine-friendly
 - clean in source control
 - not locked to Inkscape-specific metadata
+
+## 8. Project Implementation (This Repo)
+
+This repository now includes a converter script:
+
+```bash
+npm run level:from-svg -- --in Map.svg --id building-floor-1 --name "Building Floor 1" --out shared/generated/building-floor-1.level.json
+```
+
+The converter reads gameplay markers from your SVG and emits a `LevelConfig` payload compatible with `shared/levels.ts`.
+
+### Supported marker rules
+
+- `rect` with `data-kind="collision"` -> `level.boxes[]`
+- `circle` with `data-kind="portal"` -> `level.portals[]`
+- `path` with `data-kind="wall"` (or `data-kind="collision"`) -> wall segment collision boxes
+- `path` or `rect` with `data-kind="door"` (or `data-kind="opening"`) -> carves openings in wall collision
+- `data-kind` can be on the element or inherited from a parent `<g>`
+
+Wall extraction modes:
+
+- `--walls marker` = only path markers tagged as walls
+- `--walls fallback` = if no explicit wall markers exist and no collision rects exist, treat all SVG paths as walls
+- `--walls all` = treat all paths as walls
+- `--walls off` = disable path wall extraction
+
+Default mode is `fallback`, so path-only floor plans are converted without extra tagging.
+
+Door carving options:
+
+- `--door-width` controls opening width (in source SVG units, before scaling)
+- `--door-padding` adds extra clearance around each door marker
+
+If doors are marked, wall collision is cut so players can pass through those wall segments.
+
+Door example:
+
+```xml
+<path id="wall_a" data-kind="wall" d="M 40 80 L 300 80" />
+<path id="door_a" data-kind="door" d="M 160 80 L 190 80" />
+```
+
+The door path should overlap the wall segment where you want a passable opening.
+
+Portal circles must provide:
+
+- `id`
+- `cx`, `cy`, `r`
+- `data-target-level`
+- `data-target-x`, `data-target-y`
+
+Optional portal color:
+
+- `data-color`
+- or `fill` / `stroke` style
+
+### Level metadata resolution
+
+The converter resolves level size from SVG `width`/`height` or `viewBox`, and you can override with:
+
+- `--width`
+- `--height`
+
+Scaling options:
+
+- `--scale <number>` = manual global scale factor
+- `--scale-like-existing <true|false>` = auto-scale to match this repo's existing level scale (default `true`)
+
+If auto-scaling is enabled and width/height are not manually overridden, the converter:
+
+- normalizes geometry to its outermost bounds corners,
+- computes a uniform scale factor from reference map dimensions,
+- fits the level within the median reference width/height,
+- preserves aspect ratio (no independent X/Y stretch).
+
+Color defaults can be overridden with:
+
+- `--background`
+- `--grid`
+- `--box-fill`
+- `--box-stroke`
+
+### Output modes
+
+- `.json` output: includes `{ level, generatedAt }`
+- `.ts` output: emits a typed `LevelConfig` export module
+- `--append`: appends the generated level object directly into `shared/levels.ts`
+- `--replace`: replaces an existing level object in `shared/levels.ts` by matching `id`
+
+`--append` and `--replace` cannot be used together.
+
+If `--out` is omitted, JSON output is printed to stdout.
+
+### Important authoring constraints
+
+- Keep gameplay markers in dedicated hidden layers (`collision`, `portals`, etc.).
+- Avoid transforms on gameplay markers. The converter warns when transforms are present.
+- Draw coarse collision blockers intentionally instead of converting arbitrary art paths.
+- If your source is mainly a wall path, start with fallback mode and tune wall width using `--wall-thickness`.
+- Door markers should overlap the wall lines they are intended to open.
+- Generated wall boxes are now simplified and merged to reduce tiny clunky collision fragments.
+- For the cleanest results, move wall markers to a dedicated layer and use `--walls marker` so decorative art paths are ignored.

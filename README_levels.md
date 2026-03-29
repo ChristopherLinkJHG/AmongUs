@@ -59,6 +59,29 @@ The game now supports multiple levels (dimensions) in one shared room.
 - `README.md`
   - Updated controls and added level system summary.
 
+## SVG conversion workflow
+
+When generating a level from an SVG floor plan:
+
+- `--append` adds a new level entry to `shared/levels.ts` (fails if that `id` already exists).
+- `--replace` updates an existing level entry in `shared/levels.ts` by matching `id`.
+
+Examples:
+
+```bash
+# First import for a new id
+npm run level:from-svg -- --in Map.svg --id building-floor-1 --name "Building Floor 1" --out shared/generated/building-floor-1.level.json --append
+
+# Re-import after SVG edits for the same id
+npm run level:from-svg -- --in Map.svg --id building-floor-1 --name "Building Floor 1" --out shared/generated/building-floor-1.level.json --replace
+```
+
+Scale behavior note:
+
+- Auto-scale now preserves the source map boundary ratio.
+- Bounds are measured from outermost geometry corners, then uniformly scaled to fit within reference map dimensions.
+- The converter no longer stretches geometry independently on X and Y during auto-scale.
+
 ## How to use in game
 
 - Move: `WASD` or arrow keys

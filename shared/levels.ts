@@ -168,7 +168,8 @@ export const LEVELS: readonly LevelConfig[] = [
         targetY: 1220,
       },
     ],
-  },
+  },  
+  
 ];
 
 export const DEFAULT_LEVEL_ID = LEVELS[0]?.id ?? "orbit";

@@ -121,6 +121,36 @@ For a deeper breakdown of all files changed and how to add/edit levels, see:
 
 - [README_levels.md](README_levels.md)
 
+## SVG floor plan to level conversion
+
+If you have a building floor plan in SVG, convert gameplay markers into a level payload with:
+
+```bash
+npm run level:from-svg -- --in Map.svg --id building-floor-1 --name "Building Floor 1" --out shared/generated/building-floor-1.level.json
+```
+
+To append directly into `shared/levels.ts`, add `--append`:
+
+```bash
+npm run level:from-svg -- --in Map.svg --id building-floor-1 --name "Building Floor 1" --out shared/generated/building-floor-1.level.json --append
+```
+
+To replace an existing level object in `shared/levels.ts` by matching `id`, use `--replace`:
+
+```bash
+npm run level:from-svg -- --in Map.svg --id building-floor-1 --name "Building Floor 1" --out shared/generated/building-floor-1.level.json --replace
+```
+
+`--append` and `--replace` are mutually exclusive.
+
+By default the converter can extract wall collision from path-only SVG maps (fallback mode) and auto-scale from outermost geometry bounds. Auto-scale now preserves map aspect ratio and fits the generated level within reference map dimensions (no X/Y stretching).
+
+Use `data-kind="door"` (or `data-kind="opening"`) on SVG paths/rects to carve passable openings through generated walls.
+
+Marker schema and authoring rules are documented in:
+
+- [README_svg.md](README_svg.md)
+
 ## Notes
 
 - The Colyseus server runs on `http://localhost:2567`
