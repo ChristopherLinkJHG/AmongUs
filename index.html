@@ -11,6 +11,23 @@
   <body>
     <main id="game-root"></main>
     <section id="ui-overlay" class="ui-overlay">
+      <div id="join-panel" class="modal panel join-panel">
+        <h2>Spiel beitreten</h2>
+        <p>Gib deinen Namen ein und waehle eine freie Farbe.</p>
+        <div class="join-fields">
+          <label for="join-name-input">Name</label>
+          <input id="join-name-input" type="text" maxlength="14" autocomplete="off" />
+        </div>
+        <div class="join-fields">
+          <span>Farbe</span>
+          <div id="join-color-grid" class="join-color-grid"></div>
+        </div>
+        <p id="join-error" class="join-error hidden"></p>
+        <div class="meeting-actions">
+          <button id="join-submit-btn" type="button">Lobby beitreten</button>
+        </div>
+      </div>
+
       <div class="top-bar panel">
         <div>
           <span class="label">Phase</span>
@@ -27,6 +44,23 @@
       </div>
 
       <div id="status-banner" class="status-banner panel">Verbinde...</div>
+
+      <div id="lobby-panel" class="lobby panel">
+        <p>
+          Lobby-Code: <strong id="lobby-code-value">----</strong>
+        </p>
+        <div class="lobby-actions">
+          <input
+            id="lobby-code-input"
+            type="text"
+            maxlength="8"
+            autocomplete="off"
+            placeholder="Code"
+          />
+          <button id="lobby-apply-code-btn" type="button">Lobby wechseln</button>
+          <button id="start-game-btn" class="hidden" type="button">Spiel starten</button>
+        </div>
+      </div>
 
       <div id="role-briefing" class="modal panel hidden"></div>
 

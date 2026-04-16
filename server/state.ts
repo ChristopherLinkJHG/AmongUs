@@ -71,6 +71,8 @@ export type EvidenceState = SchemaType<typeof EvidenceState>;
 export const WorldState = schema({
   width: "number",
   height: "number",
+  lobbyCode: "string",
+  lobbyOwnerSessionId: "string",
   roundId: "number",
   gamePhase: "string",
   winnerTeam: "string",

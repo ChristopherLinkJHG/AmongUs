@@ -19,7 +19,9 @@ interface AppResponse {
 
 export const server = defineServer({
   rooms: {
-    world: defineRoom(WorldRoom).sortBy({ clients: -1 }),
+    world: defineRoom(WorldRoom)
+      .filterBy(["lobbyCode"])
+      .sortBy({ clients: -1 }),
   },
   express: (app) => {
     app.use(cors());

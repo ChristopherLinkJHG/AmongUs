@@ -29,6 +29,7 @@ import type {
   MovementInput,
   RestartRoundRequest,
   RoleType,
+  StartGameRequest,
   TaskType,
   TeacherCatchRequest,
   TeamType,
@@ -66,11 +67,12 @@ interface TaskSpawnPoint {
 
 const TASK_INTERACT_RADIUS = 90;
 const TEACHER_CATCH_RADIUS = 78;
-const TEACHER_CATCH_COOLDOWN_MS = 10_000;
+const TEACHER_CATCH_COOLDOWN_MS = 30_000;
 const MEETING_DISCUSSION_MS = 20_000;
 const VOTING_DURATION_MS = 25_000;
 const TASK_ACTIVATION_CHANCE = 0.62;
 const MIN_TASKS_PER_ROUND = 4;
+const MIN_PLAYERS_TO_START = 3;
 const EVIDENCE_ITEM_TYPES: readonly EvidenceItemType[] = ["phone", "backpack"];
 
 const PHASE: Record<"LOBBY" | "PLAYING" | "MEETING" | "VOTING" | "ENDED", GamePhase> = {
@@ -169,14 +171,18 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private readonly teacherCatchCooldownUntil = new Map<string, number>();
   private evidenceCounter = 0;
 
-  onCreate(): void {
+  onCreate(options: JoinOptions = {}): void {
+    const lobbyCode = sanitizeLobbyCode(options.lobbyCode);
+
     this.state.width = MAX_LEVEL_WIDTH;
     this.state.height = MAX_LEVEL_HEIGHT;
+    this.state.lobbyCode = lobbyCode;
+    this.state.lobbyOwnerSessionId = "";
     this.state.roundId = 1;
     this.state.gamePhase = PHASE.LOBBY;
     this.state.winnerTeam = "";
     this.state.teacherSessionId = "";
-    this.state.statusText = "Warte auf Spieler...";
+    this.state.statusText = `Lobby ${lobbyCode}: Warte auf Spieler (0/${MIN_PLAYERS_TO_START}).`;
     this.state.taskTotal = 0;
     this.state.taskCompleted = 0;
     this.state.meeting = new MeetingState();
@@ -188,6 +194,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     this.seedBoxes();
     this.seedTasks();
+  this.setMetadata({ lobbyCode });
 
     this.onMessage("input", (client, payload) => {
       this.inputs.set(client.sessionId, sanitizeInput(payload));
@@ -217,6 +224,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       this.restartRound(client.sessionId, payload);
     });
 
+    this.onMessage("start-game", (client, payload) => {
+      this.startGame(client.sessionId, payload);
+    });
+
     this.setSimulationInterval((deltaTime) => {
       this.updateRoundState();
       this.updatePlayers(deltaTime);
@@ -224,11 +235,22 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   }
 
   onJoin(client: Client, options: JoinOptions = {}): void {
+    const requestedColor = sanitizePlayerColor(options.color);
+
+    if (requestedColor && !this.isColorAvailable(requestedColor)) {
+      throw new Error("Diese Farbe ist bereits vergeben.");
+    }
+
+    const assignedColor = requestedColor ?? this.findFirstAvailableColor();
+    if (!assignedColor) {
+      throw new Error("Keine Spielerfarbe mehr verfuegbar.");
+    }
+
     const player = new PlayerState();
     const spawn = this.findSpawnPoint(DEFAULT_LEVEL_ID);
 
     player.name = sanitizeName(options.name, this.state.players.size + 1);
-    player.color = PLAYER_COLORS[this.state.players.size % PLAYER_COLORS.length];
+    player.color = assignedColor;
     player.levelId = DEFAULT_LEVEL_ID;
     player.x = spawn.x;
     player.y = spawn.y;
@@ -241,8 +263,13 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
     this.state.players.set(client.sessionId, player);
     this.inputs.set(client.sessionId, EMPTY_INPUT);
+
+    if (!this.state.lobbyOwnerSessionId) {
+      this.state.lobbyOwnerSessionId = client.sessionId;
+    }
+
     this.assignRoles();
-    this.transitionToPlayingIfReady();
+    this.updateLobbyState();
   }
 
   onLeave(client: Client): void {
@@ -253,8 +280,13 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.teacherCatchCooldownUntil.delete(client.sessionId);
     this.removeVotesForPlayer(client.sessionId);
 
+    if (this.state.lobbyOwnerSessionId === client.sessionId) {
+      const nextOwnerSessionId = Array.from(this.state.players.keys())[0] ?? "";
+      this.state.lobbyOwnerSessionId = nextOwnerSessionId;
+    }
+
     this.assignRoles();
-    this.transitionToPlayingIfReady();
+    this.updateLobbyState();
     this.evaluateWinConditions();
   }
 
@@ -642,8 +674,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.evaluateWinConditions();
   }
 
-  private assignRoles(): void {
+  private assignRoles(randomize = false): void {
     const entries = Array.from(this.state.players.entries());
+
+    if (randomize) {
+      shuffleArray(entries);
+    }
 
     this.state.teacherSessionId = "";
 
@@ -651,19 +687,24 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       return;
     }
 
+    const teacherCount = this.getTeacherCount(entries.length);
+    const keyStudentIndex = teacherCount;
+
     entries.forEach(([sessionId, player], index) => {
       if (entries.length === 1) {
         player.role = ROLE.STUDENT_WITH_KEY;
         return;
       }
 
-      if (index === 0) {
+      if (index < teacherCount) {
         player.role = ROLE.TEACHER;
-        this.state.teacherSessionId = sessionId;
+        if (!this.state.teacherSessionId) {
+          this.state.teacherSessionId = sessionId;
+        }
         return;
       }
 
-      if (index === 1) {
+      if (index === keyStudentIndex) {
         player.role = ROLE.STUDENT_WITH_KEY;
         return;
       }
@@ -672,17 +713,41 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     });
   }
 
-  private transitionToPlayingIfReady(): void {
-    if (this.state.players.size < 2) {
-      this.state.gamePhase = PHASE.LOBBY;
-      this.state.statusText = "Mindestens 2 Spieler werden benoetigt.";
+  private updateLobbyState(): void {
+    if (this.state.gamePhase !== PHASE.LOBBY) {
       return;
     }
 
-    if (this.state.gamePhase === PHASE.LOBBY) {
-      this.state.gamePhase = PHASE.PLAYING;
-      this.state.statusText = "Runde gestartet.";
+    const playerCount = this.state.players.size;
+    if (playerCount < MIN_PLAYERS_TO_START) {
+      this.state.statusText = `Lobby ${this.state.lobbyCode}: Warte auf Spieler (${playerCount}/${MIN_PLAYERS_TO_START}).`;
+      return;
     }
+
+    const owner = this.state.players.get(this.state.lobbyOwnerSessionId);
+    const ownerName = owner?.name ?? "Der Lobby-Host";
+    this.state.statusText = `${ownerName} kann das Spiel starten (${playerCount}/${MIN_PLAYERS_TO_START}).`;
+  }
+
+  private startGame(sessionId: string, payload: unknown): void {
+    const request = payload as StartGameRequest | undefined;
+
+    if (this.state.gamePhase !== PHASE.LOBBY && !request?.force) {
+      return;
+    }
+
+    if (sessionId !== this.state.lobbyOwnerSessionId) {
+      return;
+    }
+
+    if (this.state.players.size < MIN_PLAYERS_TO_START) {
+      this.updateLobbyState();
+      return;
+    }
+
+    this.assignRoles(true);
+    this.state.gamePhase = PHASE.PLAYING;
+    this.state.statusText = "Runde gestartet.";
   }
 
   private resolveVoting(): void {
@@ -783,12 +848,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       return;
     }
 
-    const teacher = this.state.teacherSessionId
-      ? this.state.players.get(this.state.teacherSessionId)
-      : undefined;
+    const aliveTeachers = Array.from(this.state.players.values()).filter(
+      (player) => player.alive && player.role === ROLE.TEACHER,
+    ).length;
 
-    if (!teacher || !teacher.alive) {
-      this.finishRound(TEAM.STUDENTS, "Der Lehrer wurde entfernt. Schueler gewinnen.");
+    if (aliveTeachers === 0) {
+      this.finishRound(TEAM.STUDENTS, "Alle Lehrer wurden entfernt. Schueler gewinnen.");
       return;
     }
 
@@ -796,14 +861,17 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       (player) => player.alive && player.role !== ROLE.TEACHER,
     ).length;
 
-    if (aliveStudents <= 1 && this.state.players.size >= 2) {
-      this.finishRound(TEAM.TEACHER, "Nur noch ein Schueler uebrig. Lehrer gewinnt.");
+    if (aliveStudents <= aliveTeachers && this.state.players.size >= 2) {
+      this.finishRound(
+        TEAM.TEACHER,
+        "Zu wenige Schueler uebrig. Lehrer-Team gewinnt.",
+      );
       return;
     }
 
     if (this.state.players.size < 2) {
       this.state.gamePhase = PHASE.LOBBY;
-      this.state.statusText = "Mindestens 2 Spieler werden benoetigt.";
+      this.updateLobbyState();
     }
   }
 
@@ -872,7 +940,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private resetRound(): void {
     this.state.roundId += 1;
     this.state.winnerTeam = "";
-    this.state.statusText = "Neue Runde vorbereitet.";
+  this.state.statusText = "Neue Runde vorbereitet.";
     this.state.gamePhase = PHASE.LOBBY;
 
     this.resetVotingState();
@@ -895,8 +963,25 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       this.inputs.set(sessionId, EMPTY_INPUT);
     });
 
-    this.assignRoles();
-    this.transitionToPlayingIfReady();
+    this.assignRoles(true);
+    this.updateLobbyState();
+  }
+
+  private isColorAvailable(color: string): boolean {
+    const normalized = color.toLowerCase();
+    return !Array.from(this.state.players.values()).some(
+      (player) => player.color.toLowerCase() === normalized,
+    );
+  }
+
+  private findFirstAvailableColor(): string | undefined {
+    return PLAYER_COLORS.find((color) => this.isColorAvailable(color));
+  }
+
+  private getTeacherCount(playerCount: number): number {
+    const rawCount = Math.ceil(playerCount / 6);
+    const maxAllowed = Math.max(1, playerCount - 1);
+    return clamp(rawCount, 1, maxAllowed);
   }
 
   private finishRound(winnerTeam: TeamType, message: string): void {
@@ -1025,6 +1110,33 @@ function sanitizeInput(payload: unknown): MovementInput {
 function sanitizeName(rawName: unknown, playerNumber: number): string {
   const trimmed = String(rawName ?? "").trim().slice(0, 14);
   return trimmed || `Player ${playerNumber}`;
+}
+
+function sanitizeLobbyCode(rawCode: unknown): string {
+  const normalized = String(rawCode ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 8);
+
+  if (normalized.length >= 4) {
+    return normalized;
+  }
+
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let fallback = "";
+
+  for (let index = 0; index < 6; index += 1) {
+    const charIndex = Math.floor(Math.random() * alphabet.length);
+    fallback += alphabet[charIndex] ?? "A";
+  }
+
+  return fallback;
+}
+
+function sanitizePlayerColor(rawColor: unknown): string {
+  const normalized = String(rawColor ?? "").trim().toLowerCase();
+  const matching = PLAYER_COLORS.find((paletteColor) => paletteColor.toLowerCase() === normalized);
+  return matching ?? "";
 }
 
 function randomInt(min: number, max: number): number {

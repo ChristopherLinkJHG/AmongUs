@@ -13,6 +13,8 @@ export interface LevelSwitchRequest {
 export interface JoinOptions {
   name?: string;
   language?: "de" | "en";
+  lobbyCode?: string;
+  color?: string;
 }
 
 export type RoleType = "teacher" | "student" | "student_with_key";
@@ -46,6 +48,10 @@ export interface TeacherCatchRequest {
 }
 
 export interface RestartRoundRequest {
+  force?: boolean;
+}
+
+export interface StartGameRequest {
   force?: boolean;
 }
 

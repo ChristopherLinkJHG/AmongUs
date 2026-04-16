@@ -3,6 +3,7 @@ import { Callbacks, Client, type Room } from "@colyseus/sdk";
 import "./styles.css";
 import {
   GRID_SIZE,
+  PLAYER_COLORS,
   ROOM_NAME,
   VIEWPORT_HEIGHT,
   VIEWPORT_WIDTH,
@@ -28,6 +29,7 @@ import type {
   MovementInput,
   RestartRoundRequest,
   RoleType,
+  StartGameRequest,
   TaskType,
   TeacherCatchRequest,
 } from "../shared/protocol.ts";
@@ -41,11 +43,21 @@ import type {
 } from "../server/state.ts";
 
 const SERVER_URL = resolveServerUrl();
+const LOBBY_CODE = resolveLobbyCode();
 
 const phaseValue = requireElement<HTMLElement>("#phase-value");
 const roleValue = requireElement<HTMLElement>("#role-value");
 const taskValue = requireElement<HTMLElement>("#task-value");
 const statusBanner = requireElement<HTMLElement>("#status-banner");
+const joinPanel = requireElement<HTMLElement>("#join-panel");
+const joinNameInput = requireElement<HTMLInputElement>("#join-name-input");
+const joinColorGrid = requireElement<HTMLElement>("#join-color-grid");
+const joinError = requireElement<HTMLElement>("#join-error");
+const joinSubmitButton = requireElement<HTMLButtonElement>("#join-submit-btn");
+const lobbyCodeValue = requireElement<HTMLElement>("#lobby-code-value");
+const lobbyCodeInput = requireElement<HTMLInputElement>("#lobby-code-input");
+const lobbyApplyCodeButton = requireElement<HTMLButtonElement>("#lobby-apply-code-btn");
+const startGameButton = requireElement<HTMLButtonElement>("#start-game-btn");
 const roleBriefing = requireElement<HTMLElement>("#role-briefing");
 const meetingPanel = requireElement<HTMLElement>("#meeting-panel");
 const meetingMeta = requireElement<HTMLElement>("#meeting-meta");
@@ -96,6 +108,7 @@ interface ActionKeys {
   callMeeting: Phaser.Input.Keyboard.Key;
   doTask: Phaser.Input.Keyboard.Key;
   catchStudent: Phaser.Input.Keyboard.Key;
+  startGame: Phaser.Input.Keyboard.Key;
   voteSkip: Phaser.Input.Keyboard.Key;
   voteFirst: Phaser.Input.Keyboard.Key;
   restartRound: Phaser.Input.Keyboard.Key;
@@ -180,6 +193,8 @@ class MainScene extends Phaser.Scene {
   private activeTaskId?: string;
   private activeTaskType?: TaskType;
   private activeDragItem?: HTMLElement;
+  private selectedJoinColor = PLAYER_COLORS[0] ?? "";
+  private joining = false;
   private readonly cleanedSmudges = new Set<string>();
 
   constructor() {
@@ -198,11 +213,24 @@ class MainScene extends Phaser.Scene {
     this.drawOfficeZone();
     this.setupKeyboard();
     this.setupDomUi();
-
-    void this.connect();
   }
 
   private setupDomUi(): void {
+    this.setupJoinUi();
+
+    lobbyCodeValue.textContent = LOBBY_CODE;
+    lobbyCodeInput.value = LOBBY_CODE;
+
+    lobbyApplyCodeButton.addEventListener("click", () => {
+      const nextCode = sanitizeLobbyCode(lobbyCodeInput.value) || generateLobbyCode();
+      setLobbyCodeInUrl(nextCode);
+      window.location.reload();
+    });
+
+    startGameButton.addEventListener("click", () => {
+      this.room?.send<StartGameRequest>("start-game", {});
+    });
+
     voteSkipButton.addEventListener("click", () => {
       this.room?.send<CastVoteRequest>("vote", { targetSessionId: "skip" });
     });
@@ -264,6 +292,90 @@ class MainScene extends Phaser.Scene {
         this.handleTaskDrop(slot);
       });
     }
+  }
+
+  private setupJoinUi(): void {
+    joinNameInput.value = buildPlayerName();
+    joinColorGrid.innerHTML = "";
+
+    for (const color of PLAYER_COLORS) {
+      const colorButton = document.createElement("button");
+      colorButton.type = "button";
+      colorButton.className = "join-color-option";
+      colorButton.style.backgroundColor = color;
+      colorButton.dataset.color = color;
+      colorButton.setAttribute("aria-label", `Farbe ${color}`);
+
+      if (color === this.selectedJoinColor) {
+        colorButton.classList.add("selected");
+      }
+
+      colorButton.addEventListener("click", () => {
+        this.selectedJoinColor = color;
+        this.setJoinError("");
+
+        for (const button of Array.from(joinColorGrid.querySelectorAll<HTMLButtonElement>(".join-color-option"))) {
+          button.classList.toggle("selected", button.dataset.color === color);
+        }
+      });
+
+      joinColorGrid.append(colorButton);
+    }
+
+    const onSubmit = () => {
+      void this.submitJoin();
+    };
+
+    joinSubmitButton.addEventListener("click", onSubmit);
+    joinNameInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        onSubmit();
+      }
+    });
+  }
+
+  private async submitJoin(): Promise<void> {
+    if (this.joining) {
+      return;
+    }
+
+    const name = joinNameInput.value.trim().slice(0, 14);
+    if (!name) {
+      this.setJoinError("Bitte gib zuerst einen Namen ein.");
+      return;
+    }
+
+    if (!this.selectedJoinColor) {
+      this.setJoinError("Bitte waehle eine Farbe aus.");
+      return;
+    }
+
+    this.joining = true;
+    joinSubmitButton.disabled = true;
+    this.setJoinError("");
+
+    const connected = await this.connect({
+      name,
+      language: "de",
+      lobbyCode: LOBBY_CODE,
+      color: this.selectedJoinColor,
+    } satisfies JoinOptions);
+
+    this.joining = false;
+    joinSubmitButton.disabled = false;
+
+    if (connected) {
+      joinPanel.classList.add("hidden");
+      return;
+    }
+
+    joinPanel.classList.remove("hidden");
+  }
+
+  private setJoinError(message: string): void {
+    joinError.textContent = message;
+    joinError.classList.toggle("hidden", !message);
   }
 
   private drawBackdrops(): void {
@@ -366,19 +478,17 @@ class MainScene extends Phaser.Scene {
       callMeeting: Phaser.Input.Keyboard.KeyCodes.M,
       doTask: Phaser.Input.Keyboard.KeyCodes.F,
       catchStudent: Phaser.Input.Keyboard.KeyCodes.C,
+      startGame: Phaser.Input.Keyboard.KeyCodes.G,
       voteSkip: Phaser.Input.Keyboard.KeyCodes.V,
       voteFirst: Phaser.Input.Keyboard.KeyCodes.ONE,
       restartRound: Phaser.Input.Keyboard.KeyCodes.R,
     }) as ActionKeys;
   }
 
-  private async connect(): Promise<void> {
+  private async connect(joinOptions: JoinOptions): Promise<boolean> {
     try {
       this.client = new Client(SERVER_URL);
-      this.room = await this.client.joinOrCreate<WorldState>(ROOM_NAME, {
-        name: buildPlayerName(),
-        language: "de",
-      } satisfies JoinOptions);
+      this.room = await this.client.joinOrCreate<WorldState>(ROOM_NAME, joinOptions);
       this.callbacks = Callbacks.get(this.room);
       this.sessionId = this.room.sessionId;
 
@@ -392,8 +502,16 @@ class MainScene extends Phaser.Scene {
         },
         { once: true },
       );
+      return true;
     } catch (error: unknown) {
-      console.error(`Connection failed: ${formatError(error)}`);
+      const message = formatError(error);
+      this.setJoinError(
+        message.includes("Farbe")
+          ? message
+          : `Verbindung fehlgeschlagen: ${message}`,
+      );
+      console.error(`Connection failed: ${message}`);
+      return false;
     }
   }
 
@@ -839,6 +957,14 @@ class MainScene extends Phaser.Scene {
     if (Phaser.Input.Keyboard.JustDown(this.actionKeys.restartRound)) {
       this.room.send<RestartRoundRequest>("restart-round", {});
     }
+
+    if (
+      gamePhase === "lobby" &&
+      this.sessionId === this.room.state.lobbyOwnerSessionId &&
+      Phaser.Input.Keyboard.JustDown(this.actionKeys.startGame)
+    ) {
+      this.room.send<StartGameRequest>("start-game", {});
+    }
   }
 
   private updateAvatarVisibility(sessionId: string, avatar: AvatarParts): void {
@@ -953,6 +1079,13 @@ class MainScene extends Phaser.Scene {
     taskValue.textContent = `${state.taskCompleted}/${state.taskTotal}`;
 
     const evidenceNearby = this.findNearestReportableEvidence();
+    const playerCount = state.players.size;
+    const isHost = this.sessionId === state.lobbyOwnerSessionId;
+
+    lobbyCodeValue.textContent = state.lobbyCode || LOBBY_CODE;
+    startGameButton.classList.toggle("hidden", phase !== "lobby" || !isHost);
+    startGameButton.disabled = phase !== "lobby" || !isHost || playerCount < 3;
+
     const hints: string[] = [];
     if (me?.alive && phase === "playing") {
       hints.push("M = Besprechung");
@@ -962,6 +1095,13 @@ class MainScene extends Phaser.Scene {
       }
       if (evidenceNearby) {
         hints.push("Hinweis gefunden: M druecken");
+      }
+    }
+
+    if (phase === "lobby") {
+      hints.push(`Spieler: ${playerCount}/3`);
+      if (isHost) {
+        hints.push("G = Spiel starten");
       }
     }
 
@@ -1680,6 +1820,53 @@ function sameInput(a: MovementInput, b: MovementInput): boolean {
 
 function buildPlayerName(): string {
   return `Crew ${Math.floor(Math.random() * 900 + 100)}`;
+}
+
+function resolveLobbyCode(): string {
+  const params = new URLSearchParams(window.location.search);
+  const fromUrl = sanitizeLobbyCode(params.get("code"));
+
+  if (fromUrl) {
+    return fromUrl;
+  }
+
+  const generated = generateLobbyCode();
+  setLobbyCodeInUrl(generated);
+  return generated;
+}
+
+function sanitizeLobbyCode(rawCode: unknown): string {
+  const normalized = String(rawCode ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 8);
+
+  if (normalized.length < 4) {
+    return "";
+  }
+
+  return normalized;
+}
+
+function generateLobbyCode(): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let result = "";
+
+  for (let index = 0; index < 6; index += 1) {
+    const charIndex = Math.floor(Math.random() * alphabet.length);
+    result += alphabet[charIndex] ?? "A";
+  }
+
+  return result;
+}
+
+function setLobbyCodeInUrl(lobbyCode: string): void {
+  const params = new URLSearchParams(window.location.search);
+  params.set("code", lobbyCode);
+
+  const query = params.toString();
+  const nextUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+  window.history.replaceState(null, "", nextUrl);
 }
 
 function resolveServerUrl(): string {
