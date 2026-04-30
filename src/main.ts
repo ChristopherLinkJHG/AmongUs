@@ -217,6 +217,7 @@ class MainScene extends Phaser.Scene {
 
   private setupDomUi(): void {
     this.setupJoinUi();
+    this.setupTextInputFocusHandling();
 
     lobbyCodeValue.textContent = LOBBY_CODE;
     lobbyCodeInput.value = LOBBY_CODE;
@@ -333,6 +334,30 @@ class MainScene extends Phaser.Scene {
         onSubmit();
       }
     });
+  }
+
+  private setupTextInputFocusHandling(): void {
+    const keyboard = this.input.keyboard;
+
+    const setKeyboardEnabled = (enabled: boolean) => {
+      if (!keyboard) {
+        return;
+      }
+
+      keyboard.enabled = enabled;
+    };
+
+    const attachFocusHandlers = (input: HTMLInputElement) => {
+      input.addEventListener("focus", () => setKeyboardEnabled(false));
+      input.addEventListener("blur", () => setKeyboardEnabled(true));
+      input.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+      });
+    };
+
+    attachFocusHandlers(joinNameInput);
+    attachFocusHandlers(lobbyCodeInput);
+    attachFocusHandlers(homeworkInput);
   }
 
   private async submitJoin(): Promise<void> {
@@ -531,6 +556,12 @@ class MainScene extends Phaser.Scene {
 
   private registerStateCallbacks(): void {
     const callbacks = this.getCallbacks();
+
+    callbacks.listen(this.room!.state, "gamePhase", () => {
+      for (const [sessionId, avatar] of this.players.entries()) {
+        this.updateAvatarVisibility(sessionId, avatar);
+      }
+    });
 
     callbacks.onAdd("boxes", (box) => {
       this.addBox(box);
@@ -968,6 +999,12 @@ class MainScene extends Phaser.Scene {
   }
 
   private updateAvatarVisibility(sessionId: string, avatar: AvatarParts): void {
+    const gamePhase = this.room?.state.gamePhase as GamePhase | undefined;
+    if (gamePhase === "lobby" && sessionId === this.sessionId) {
+      avatar.container.setVisible(false);
+      return;
+    }
+
     if (avatar.levelId !== this.localLevelId) {
       avatar.container.setVisible(false);
       return;
