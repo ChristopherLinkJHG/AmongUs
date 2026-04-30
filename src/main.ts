@@ -511,9 +511,21 @@ class MainScene extends Phaser.Scene {
   }
 
   private async connect(joinOptions: JoinOptions): Promise<boolean> {
+    const timeoutMs = 8000;
+    let timeoutId: number | undefined;
+
     try {
       this.client = new Client(SERVER_URL);
-      this.room = await this.client.joinOrCreate<WorldState>(ROOM_NAME, joinOptions);
+      statusBanner.textContent = "Verbinde...";
+
+      const joinPromise = this.client.joinOrCreate<WorldState>(ROOM_NAME, joinOptions);
+      const timeoutPromise = new Promise<Room<any, WorldState>>((_, reject) => {
+        timeoutId = window.setTimeout(() => {
+          reject(new Error("Verbindung dauert zu lange. Bitte erneut versuchen."));
+        }, timeoutMs);
+      });
+
+      this.room = await Promise.race([joinPromise, timeoutPromise]);
       this.callbacks = Callbacks.get(this.room);
       this.sessionId = this.room.sessionId;
 
@@ -530,6 +542,10 @@ class MainScene extends Phaser.Scene {
       return true;
     } catch (error: unknown) {
       const message = formatError(error);
+      statusBanner.textContent = "Verbindung fehlgeschlagen.";
+      this.room = undefined;
+      this.callbacks = undefined;
+      this.sessionId = undefined;
       this.setJoinError(
         message.includes("Farbe")
           ? message
@@ -537,6 +553,10 @@ class MainScene extends Phaser.Scene {
       );
       console.error(`Connection failed: ${message}`);
       return false;
+    } finally {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
     }
   }
 

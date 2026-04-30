@@ -34,6 +34,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 2567
+      MONITOR_USER: admin
+      MONITOR_PASS: change-me
     ports:
       - "2567:2567"
     restart: unless-stopped
