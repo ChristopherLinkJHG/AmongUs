@@ -33,7 +33,7 @@ services:
     container_name: amongus-server
     environment: ["NODE_ENV=production", "PORT=2567", "MONITOR_USER=admin", "MONITOR_PASS=change-me"]
     ports: ["2567:2567"]
-  volumes: ["./:/app", "/app/node_modules"]
+    volumes: ["./:/app", "/app/node_modules"]
     restart: unless-stopped
     healthcheck:
       test:
