@@ -31,22 +31,13 @@ services:
 
         CMD ["npm", "run", "server"]
     container_name: amongus-server
-    environment:
-      NODE_ENV: production
-      PORT: 2567
-      MONITOR_USER: admin
-      MONITOR_PASS: change-me
-    ports:
-      - "2567:2567"
+    environment: ["NODE_ENV=production", "PORT=2567", "MONITOR_USER=admin", "MONITOR_PASS=change-me"]
+    ports: ["2567:2567"]
+  volumes: ["./:/app"]
     restart: unless-stopped
     healthcheck:
       test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:2567/health').then((res)=>process.exit(res.ok?0:1)).catch(()=>process.exit(1))"
-        ]
+        ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:2567/health').then((res)=>process.exit(res.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 30s
       timeout: 5s
       retries: 3
