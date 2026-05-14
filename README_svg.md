@@ -58,6 +58,12 @@ npm run level -- --in Map.svg --id building-floor-1 --name "Building Floor 1" --
 - `--walkable-buffer <number>` (default: player size, set `0` to disable)
 - `--width <number>` and `--height <number>`
 
+Tip: The UG_Schule_Plan.svg uses an A4-sized viewBox (210 x 297), so its raw coordinates are tiny versus the in-game world size. That is why it needs a big scale. A good starting point is:
+
+```bash
+npm run level -- --in UG_Schule_Plan.svg --id UG --name "UG" --replace --scale 20
+```
+
 ## Notes
 
 - If no collision markers and no wall paths are found, plain `rect` elements are used as a collision fallback.

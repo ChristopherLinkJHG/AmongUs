@@ -18,6 +18,18 @@ const DEFAULT_WALKABLE_BUFFER = PLAYER_RADIUS * 2;
 
 const LEVELS_ARRAY_END_ANCHOR = "\n];\n\nexport const DEFAULT_LEVEL_ID";
 
+function findLevelsArrayAnchorIndex(source: string, startIndex = 0): number {
+  const lfAnchor = LEVELS_ARRAY_END_ANCHOR;
+  const crlfAnchor = lfAnchor.replace(/\n/g, "\r\n");
+  const lfIndex = source.indexOf(lfAnchor, startIndex);
+
+  if (lfIndex !== -1) {
+    return lfIndex;
+  }
+
+  return source.indexOf(crlfAnchor, startIndex);
+}
+
 interface CliOptions {
   inputPath: string;
   levelId: string;
@@ -1482,7 +1494,7 @@ async function writeLevelToSharedLevels(
   const source = await fs.readFile(levelsFilePath, "utf8");
   const levelLiteral = buildLevelLiteral(level, 2);
   const existingRange = findLevelObjectRangeInLevelsSource(source, level.id);
-  const anchorIndex = source.indexOf(LEVELS_ARRAY_END_ANCHOR);
+  const anchorIndex = findLevelsArrayAnchorIndex(source);
 
   if (anchorIndex === -1) {
     throw new Error("Could not locate LEVELS array end in shared/levels.ts.");
@@ -1516,7 +1528,7 @@ function findLevelObjectRangeInLevelsSource(source: string, levelId: string): So
   }
 
   const arrayOpenIndex = source.indexOf("[", declIndex);
-  const arrayEndIndex = source.indexOf(LEVELS_ARRAY_END_ANCHOR, declIndex);
+  const arrayEndIndex = findLevelsArrayAnchorIndex(source, declIndex);
 
   if (arrayOpenIndex === -1 || arrayEndIndex === -1 || arrayEndIndex <= arrayOpenIndex) {
     throw new Error("Could not parse LEVELS array in shared/levels.ts.");

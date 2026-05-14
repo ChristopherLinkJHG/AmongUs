@@ -6,6 +6,9 @@ import cors from "cors";
 import { defineRoom, defineServer } from "colyseus";
 import { monitor } from "@colyseus/monitor";
 import { WorldRoom } from "./rooms/WorldRoom.ts";
+import { Encoder } from "@colyseus/schema";
+
+Encoder.BUFFER_SIZE = 128 * 1024; // 128 KB
 
 const serverDir = dirname(fileURLToPath(import.meta.url));
 const distDir = resolve(serverDir, "../dist");
